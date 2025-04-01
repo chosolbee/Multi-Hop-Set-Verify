@@ -27,39 +27,37 @@ class VerifierDataset(Dataset):
         with open(filepath, 'r', encoding='utf-8') as f:
             for line in f:
                 entry = json.loads(line)
-
                 question = entry["question"]
                 passages = entry["passages"]
                 passages_text = " [SEP] ".join([p["paragraph_text"] for p in passages])
                 text = f"Question: {question} [SEP] {passages_text}"
-
-                encoding = self.tokenizer(
-                    text,
-                    padding="max_length",
-                    truncation=True,
-                    max_length=self.max_length,
-                    return_tensors="pt"
-                )
-                encoding = {key: val.squeeze(0) for key, val in encoding.items()}
-                self.data.append(encoding)
-
                 score = entry["score"]
                 raw_scores.append(score)
+                self.data.append({"text": text, "raw_score": score})
 
         self.min_score = min(raw_scores)
         self.max_score = max(raw_scores)
         if self.max_score == self.min_score:
             self.max_score += 1e-6
-
-        for idx, encoding in enumerate(self.data):
-            normalized = (raw_scores[idx] - self.min_score) / (self.max_score - self.min_score)
-            encoding["labels"] = torch.tensor(normalized * desired_scale, dtype=torch.float)
+        for item in self.data:
+            normalized = (item["raw_score"] - self.min_score) / (self.max_score - self.min_score)
+            item["score"] = normalized * self.desired_scale
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx]
+        item = self.data[idx]
+        encoding = self.tokenizer(
+            item["text"],
+            padding="max_length",
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt"
+        )
+        encoding = {key: val.squeeze(0) for key, val in encoding.items()}
+        encoding["labels"] = torch.tensor(item["score"], dtype=torch.float)
+        return encoding
 
 def collate_fn(batch):
     input_ids = torch.stack([x["input_ids"] for x in batch])

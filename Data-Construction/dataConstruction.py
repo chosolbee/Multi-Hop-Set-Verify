@@ -1,7 +1,7 @@
 import json
 import random
 import itertools
-from copy import deepcopy
+import argparse
 
 def compute_metrics(candidate_ids, gold_ids):
     if not candidate_ids:
@@ -117,7 +117,21 @@ def process_file(input_path, output_path, max_incomplete=5, max_noise=5):
             fout.write(json.dumps(candidate, ensure_ascii=False) + "\n")
     print(f"Processed {len(new_data)} candidate instances. Saved to {output_path}")
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Data Construction",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument("-i", "--input", required=True, help="Input File Path", type=str)
+    parser.add_argument("-o", "--output", required=True, help="Output File Path", type=str)
+    
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    input_file = "INPUT_FILE.jsonl"
-    output_file = "OUTPUT_FILE.jsonl"
-    process_file(input_file, output_file)
+    args = parse_arguments()
+
+    input_path = args.input
+    output_path = args.output
+
+    process_file(input_path, output_path)

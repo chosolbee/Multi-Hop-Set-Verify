@@ -1,5 +1,6 @@
 import os
 import json
+import argparse
 import torch
 import numpy as np
 from torch.utils.data import Dataset, random_split, DataLoader
@@ -11,8 +12,9 @@ from transformers import (
     EvalPrediction,
     TrainerCallback,
 )
-from config import WANDB_ENTITY, WANDB_TOKEN, DATA_PATH
+from config import WANDB_ENTITY
 import torch.nn as nn
+import wandb
 
 class VerifierDataset(Dataset):
     def __init__(self, filepath, tokenizer, max_length=768, desired_scale=10):
@@ -106,11 +108,23 @@ class PrintCallback(TrainerCallback):
                 print(f"  {key}: {value:.4f}")
             print("-" * 40)
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Verifier Train",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument("-t", "--train", help="Training Set Path", type=str)
+    parser.add_argument("-v", "--val", help="Evaluation Set Path", type=str)
+    
+    return parser.parse_args()
+
 def main():
-    os.environ["WANDB_API_KEY"] = WANDB_TOKEN
-    import wandb
+    args = parse_arguments()
+
     wandb.init(project="MultiHopVerifierTraining", entity=WANDB_ENTITY)
-    data_path = DATA_PATH
+    train_data_path = args.train
+    val_data_path = args.val
     model_name = "microsoft/deberta-v3-large"
     max_length = 768
     desired_scale = 10
@@ -119,20 +133,18 @@ def main():
     learning_rate = 5e-5
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=1)
-    model.config.problem_type = "regression"
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=1, problem_type="regression")
 
-    dataset = VerifierDataset(data_path, tokenizer, max_length=max_length, desired_scale=desired_scale)
-    total_size = len(dataset)
-    train_size = int(0.8 * total_size)
-    val_size = total_size - train_size
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    
+    train_dataset = VerifierDataset(train_data_path, tokenizer, max_length=max_length, desired_scale=desired_scale)
+    val_dataset = VerifierDataset(val_data_path, tokenizer, max_length=max_length, desired_scale=desired_scale)
     training_args = TrainingArguments(
         output_dir="./verifier_results",
         learning_rate=learning_rate,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.1,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
+        gradient_accumulation_steps=4,
         num_train_epochs=num_epochs,
         evaluation_strategy="steps",
         eval_steps=500,

@@ -116,15 +116,11 @@ def parse_arguments():
     
     parser.add_argument("-t", "--train", help="Training Set Path", type=str)
     parser.add_argument("-v", "--val", help="Evaluation Set Path", type=str)
-    parser.add_argument("-w", "--wandb_entity", default=0.5, help="Lambda Value", type=float)
     
     return parser.parse_args()
 
 def main():
-    parser = argparse.ArgumentParser(description="Verifier Train")
-    parser.add_argument("-t", "--train", help="Training Set Path", type=str)
-    parser.add_argument("-v", "--val", help="Evaluation Set Path", type=str)
-    args = parser.parse_args()
+    args = parse_arguments()
 
     wandb.init(project="MultiHopVerifierTraining", entity=WANDB_ENTITY)
     train_data_path = args.train

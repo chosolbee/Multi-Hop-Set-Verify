@@ -1,4 +1,5 @@
 import json
+import argparse
 
 def process_data(input_path, output_path, lambda_val=0.5):
     with open(input_path, 'r', encoding='utf-8') as fin, \
@@ -14,8 +15,23 @@ def process_data(input_path, output_path, lambda_val=0.5):
             data["score"] = coverage - lambda_val * noise
             fout.write(json.dumps(data, ensure_ascii=False) + "\n")
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Scoring",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter  # Shows defaults in help
+    )
+    
+    parser.add_argument("-i", "--input", required=True, help="Input File Path", type=str)
+    parser.add_argument("-o", "--output", required=True, help="Output File Path", type=str)
+    parser.add_argument("-l", "--lambda", default=0.5, help="Lambda Value", type=float)
+    
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    input_path = "INPUT_FILE.jsonl"
-    output_path = "OUTPUT_FILE.jsonl"
-    lambda_val = 0.5
+    args = parse_arguments()
+
+    input_path = args.input
+    output_path = args.output
+    lambda_val = args.lambda
+
     process_data(input_path, output_path, lambda_val)

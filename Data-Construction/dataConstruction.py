@@ -119,8 +119,8 @@ def process_file(input_path, output_path, max_incomplete=5, max_noise=5):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Scoring",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter  # Shows defaults in help
+        description="Data Construction",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
     parser.add_argument("-i", "--input", required=True, help="Input File Path", type=str)

@@ -18,7 +18,7 @@ def process_data(input_path, output_path, lambda_val=0.5):
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="Scoring",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter  # Shows defaults in help
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
     parser.add_argument("-i", "--input", required=True, help="Input File Path", type=str)

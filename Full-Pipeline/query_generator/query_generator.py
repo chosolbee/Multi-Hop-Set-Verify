@@ -4,7 +4,8 @@ import torch
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-class QueryGenerator():
+
+class QueryGenerator:
     def __init__(self, model_id, cache_dir=None, max_gen_length=200, temperature=0.7, top_p=0.9):
         self.max_gen_length = max_gen_length
         self.temperature = temperature
@@ -13,7 +14,7 @@ class QueryGenerator():
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_id, 
             cache_dir=cache_dir, 
-            trust_remote_code=True
+            trust_remote_code=True,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -45,7 +46,7 @@ class QueryGenerator():
             "Here are some examples for your reference:\n\n"
             "Example 1:\n"
             "Question: What's the meaning of the name of the school that does not include the Mahayava scriptures in its canon?\n"
-            "Your Response: The given question is asking about the meaning of the name of a specific school. To answer this, I need to know the name of the school that does not include the Mahayava scriptures in its canon. Therefore, my retrieval query would be: <query>What is the name of the school that does not include the Mahayava scriptures in its canon?</query>\n\n"            
+            "Your Response: The given question is asking about the meaning of the name of a specific school. To answer this, I need to know the name of the school that does not include the Mahayava scriptures in its canon. Therefore, my retrieval query would be: <query>What is the name of the school that does not include the Mahayava scriptures in its canon?</query>\n\n"
             "Example 2:\n"
             "Question: Who founded the company that distributed the film UHF?\n"
             "Your Response: The given question is asking about the founder of a specific company. To answer this, I need to know the name of the company that distributed the film UHF. Therefore, my retrieval query would be: <query>What is the name of the company that distributed the film UHF?</query>\n\n"
@@ -68,9 +69,12 @@ class QueryGenerator():
                 prompt += f"Confirmed Passage {idx}: {passage['text']}\n"
         prompt += "<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>"
         return prompt.strip()
-    
+
     def batch_generate(self, questions, batch_confirmed_passages):
-        prompts = [self._gen_retriever_query_prompt(question["question"], confirmed_passages) for question, confirmed_passages in zip(questions, batch_confirmed_passages)]
+        prompts = [
+            self._gen_retriever_query_prompt(question["question"], confirmed_passages)
+            for question, confirmed_passages in zip(questions, batch_confirmed_passages)
+        ]
         inputs = self.tokenizer(prompts, padding=True, padding_side="left", return_tensors="pt").to(self.model.device)
 
         input_lengths = [i.size(0) for i in inputs["input_ids"]]
@@ -78,11 +82,11 @@ class QueryGenerator():
             **inputs,
             max_new_tokens=self.max_gen_length,
             temperature=self.temperature,
-            top_p=self.top_p
+            top_p=self.top_p,
         )
         generated_texts = self.tokenizer.batch_decode(
             [output[input_lengths[i]:] for i, output in enumerate(outputs)],
-            skip_special_tokens=True
+            skip_special_tokens=True,
         )
         clean_texts = [self.extract_query(text) for text in generated_texts]
         return clean_texts
@@ -90,11 +94,12 @@ class QueryGenerator():
     def extract_query(self, generated_text):
         pattern = r"<query>(.*?)</query>"
         match = re.search(pattern, generated_text, re.DOTALL)
-        
+
         if match:
             return match.group(1).strip()
         else:
             return generated_text.strip()
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -102,24 +107,25 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+
 def test(args: argparse.Namespace):
     query_generator = QueryGenerator(
         model_id="meta-llama/Meta-Llama-3-8B-Instruct",
         cache_dir=args.cache_dir,
         max_gen_length=200,
         temperature=0.7,
-        top_p=0.9
+        top_p=0.9,
     )
     questions = [{"question": "What is the capital of France?"}, {"question": "Explain the theory of relativity."}]
     batch_confirmed_passages = [
         [
             {"text": "The capital of France is Paris."},
-            {"text": "The theory of relativity was developed by Albert Einstein."}
+            {"text": "The theory of relativity was developed by Albert Einstein."},
         ],
         [
             {"text": "The capital of France is Paris."},
-            {"text": "The theory of relativity was developed by Albert Einstein."}
-        ]
+            {"text": "The theory of relativity was developed by Albert Einstein."},
+        ],
     ]
 
     generated_queries = query_generator.batch_generate(questions, batch_confirmed_passages)

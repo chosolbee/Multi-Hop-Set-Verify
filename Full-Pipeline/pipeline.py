@@ -119,12 +119,13 @@ def main(args: argparse.Namespace):
     with open(opt.questions, "r") as f:
         questions = f.readlines()
         questions = [json.loads(q) for q in questions]
-    
+
     run_batch(retriever, query_generator, verifier, questions)
 
     print("All done!")
 
     wandb.finish()
+
 
 if __name__ == "__main__":
     args = parse_args()

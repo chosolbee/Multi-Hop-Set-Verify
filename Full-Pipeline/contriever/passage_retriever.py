@@ -103,8 +103,7 @@ def test(opt: argparse.Namespace):
     retriever = Retriever(
         opt.passages,
         opt.embeddings,
-        model_type=opt.model_type,
-        model_path=opt.model_name_or_path,
+        model_type="contriever"
     )
     if opt.query is None:
         queries = [

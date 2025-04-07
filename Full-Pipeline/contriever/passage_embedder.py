@@ -19,7 +19,7 @@ def parse_args():
         help="Path to passages (tsv or jsonl file)",
     )
     parser.add_argument("--output_dir", type=str, required=True, help="Path to output file")
-    parser.add_argument("--model_type", type=str, default="e5-base-v2", choices=list(ModelTypes.keys()))
+    parser.add_argument("--model_type", type=str, default="contriever", choices=list(ModelTypes.keys()))
     parser.add_argument("--model_name_or_path", type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--chunk_size", type=int, default=int(2e6), help="passages per chunk")

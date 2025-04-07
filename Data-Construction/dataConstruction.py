@@ -6,132 +6,105 @@ import argparse
 def compute_metrics(candidate_ids, gold_ids):
     if not candidate_ids:
         return 0.0, 0.0
-    num_gold_in_candidate = len(set(candidate_ids) & set(gold_ids))
-    coverage = num_gold_in_candidate / len(gold_ids) if gold_ids else 0.0
-    noise = (len(candidate_ids) - num_gold_in_candidate) / len(candidate_ids)
+    intersection = len(set(candidate_ids) & set(gold_ids))
+    coverage = intersection / len(gold_ids) if gold_ids else 0.0
+    noise = (len(candidate_ids) - intersection) / len(candidate_ids)
     return coverage, noise
 
-def sample_incomplete_sets(gold_ids, max_incomplete=5):
-    incomplete_sets = []
+def sample_incomplete_sets(gold_ids, max_samples):
     k = len(gold_ids)
     if k <= 1:
-        return incomplete_sets
-    for r in range(1, k):
-        for subset in itertools.combinations(gold_ids, r):
-            incomplete_sets.append(set(subset))
-    if len(incomplete_sets) > max_incomplete:
-        incomplete_sets = random.sample(incomplete_sets, max_incomplete)
-    return incomplete_sets
+        return []
+    all_subsets = [set(s) for r in range(1, k) for s in itertools.combinations(gold_ids, r)]
+    return random.sample(all_subsets, min(len(all_subsets), max_samples))
 
-def sample_noise_sets(all_ids, gold_ids, max_noise=5, candidate_size_choices=None):
-    noise_sets = set()
-    max_tries = 1000
-    tries = 0
-    while len(noise_sets) < max_noise and tries < max_tries:
-        tries += 1
-        size = random.choice(candidate_size_choices)
-        candidate = set(random.sample(all_ids, size))
-        if candidate.issubset(set(gold_ids)):
-            continue
-        noise_sets.add(frozenset(candidate))
-    return [set(s) for s in noise_sets]
+def sample_noise_only_set(all_ids, gold_ids):
+    noise_pool = list(set(all_ids) - set(gold_ids))
+    if not noise_pool:
+        return set()
+    size = random.choice([s for s in range(1, 6) if s <= len(noise_pool)])
+    return set(random.sample(noise_pool, size))
 
-def construct_candidate_instances(instance, max_incomplete=5, max_noise=5):
-    if "gold_passages" in instance:
-        gold_ids = instance["gold_passages"]
-    else:
-        gold_ids = [p["idx"] for p in instance.get("paragraphs", []) if p.get("is_supporting", False)]
-        instance["gold_passages"] = gold_ids
-    all_ids = [p["idx"] for p in instance.get("paragraphs", [])]
-    
-    candidate_instances = []
-    hop = len(gold_ids)
-    question_id = instance.get("id", None)
-    
-    complete_set = set(gold_ids)
-    coverage, noise = compute_metrics(complete_set, gold_ids)
-    candidate_instances.append({
-         "question_id": question_id,
-         "question": instance["question"],
-         "gold_passages": gold_ids,
-         "hop": hop,
-         "passages": [p for p in instance["paragraphs"] if p["idx"] in complete_set],
-         "set_type": "complete",
-         "coverage": coverage,
-         "noise": noise
-    })
-    
-    incomplete_candidate_sets = sample_incomplete_sets(gold_ids, max_incomplete=max_incomplete)
-    for cand in incomplete_candidate_sets:
-         coverage, noise = compute_metrics(cand, gold_ids)
-         candidate_instances.append({
-             "question_id": question_id,
-             "question": instance["question"],
-             "gold_passages": gold_ids,
-             "hop": hop,
-             "passages": [p for p in instance["paragraphs"] if p["idx"] in cand],
-             "set_type": "incomplete",
-             "coverage": coverage,
-             "noise": noise
-         })
-    
-    candidate_size_choices = list(range(1, len(gold_ids) + 2))
-    noise_candidate_sets = sample_noise_sets(all_ids, gold_ids, max_noise=max_noise, candidate_size_choices=candidate_size_choices)
-    for cand in noise_candidate_sets:
-         coverage, noise = compute_metrics(cand, gold_ids)
-         candidate_instances.append({
-             "question_id": question_id,
-             "question": instance["question"],
-             "gold_passages": gold_ids,
-             "hop": hop,
-             "passages": [p for p in instance["paragraphs"] if p["idx"] in cand],
-             "set_type": "noise",
-             "coverage": coverage,
-             "noise": noise
-         })
-    return candidate_instances
+def sample_noise_with_gold_sets(all_ids, gold_ids, max_samples):
+    noise_pool = list(set(all_ids) - set(gold_ids))
+    results = set()
+    while len(results) < max_samples:
+        if not gold_ids:
+            break
+        seed_size = random.choice([s for s in range(1, min(5, len(gold_ids)+1))])
+        seed = set(random.sample(gold_ids, seed_size))
+        noise_limit = min(5 - seed_size, 2)
+        noise_count = random.choice([n for n in [1, 2] if n <= noise_limit and n <= len(noise_pool)])
+        noise = set(random.sample(noise_pool, noise_count))
+        results.add(frozenset(seed | noise))
+    return [set(s) for s in results]
+
+def build_candidate(question_id, question, gold_ids, hop, paragraphs, selected_ids, set_type):
+    coverage, noise = compute_metrics(selected_ids, gold_ids)
+    return {
+        "question_id": question_id,
+        "question": question,
+        "gold_passages": gold_ids,
+        "hop": hop,
+        "passages": [p for p in paragraphs if p["idx"] in selected_ids],
+        "set_type": set_type,
+        "coverage": coverage,
+        "noise": noise
+    }
+
+def construct_candidate_instances(instance, max_incomplete=5, max_noise_with_gold=5):
+    paragraphs = instance.get("paragraphs", [])
+    gold_ids = instance.get("gold_passages") or [p["idx"] for p in paragraphs if p.get("is_supporting")]
+    instance["gold_passages"] = gold_ids
+    all_ids = [p["idx"] for p in paragraphs]
+    qid, question, hop = instance.get("id"), instance["question"], len(gold_ids)
+
+    candidates = []
+
+    # complete
+    candidates.append(build_candidate(qid, question, gold_ids, hop, paragraphs, set(gold_ids), "complete"))
+
+    # incomplete
+    for cand in sample_incomplete_sets(gold_ids, max_incomplete):
+        candidates.append(build_candidate(qid, question, gold_ids, hop, paragraphs, cand, "incomplete"))
+
+    # noise_only
+    noise_only = sample_noise_only_set(all_ids, gold_ids)
+    if noise_only:
+        candidates.append(build_candidate(qid, question, gold_ids, hop, paragraphs, noise_only, "noise_only"))
+
+    # noise_with_gold
+    for cand in sample_noise_with_gold_sets(all_ids, gold_ids, max_noise_with_gold):
+        candidates.append(build_candidate(qid, question, gold_ids, hop, paragraphs, cand, "noise_with_gold"))
+
+    return candidates
 
 def print_candidate_instance_summary(candidate):
-    passage_ids = [p["idx"] for p in candidate.get("passages", [])]
-    print(f"Question ID: {candidate.get('question_id', 'N/A')}")
-    print(f"Question: {candidate['question']}")
-    print(f"Set Type: {candidate['set_type']}")
-    print(f"Hop: {candidate['hop']}")
-    print(f"Passage IDs: {passage_ids}")
-    print(f"Coverage: {candidate['coverage']}, Noise: {candidate['noise']}")
-    print("-" * 50)
+    ids = [p["idx"] for p in candidate.get("passages", [])]
+    print(f"[{candidate['set_type'].upper()}] QID: {candidate['question_id']} | Hop: {candidate['hop']} | IDs: {ids} | Coverage: {candidate['coverage']:.2f}, Noise: {candidate['noise']:.2f}")
 
-def process_file(input_path, output_path, max_incomplete=5, max_noise=5):
-    new_data = []
+def process_file(input_path, output_path, max_incomplete=5, max_noise_with_gold=5):
+    all_candidates = []
     with open(input_path, 'r', encoding='utf-8') as fin:
         for line in fin:
             if not line.strip():
                 continue
             instance = json.loads(line)
-            candidate_instances = construct_candidate_instances(instance, max_incomplete, max_noise)
-            new_data.extend(candidate_instances)
-            for candidate in candidate_instances:
-                print_candidate_instance_summary(candidate)
+            candidates = construct_candidate_instances(instance, max_incomplete, max_noise_with_gold)
+            all_candidates.extend(candidates)
+            for c in candidates:
+                print_candidate_instance_summary(c)
     with open(output_path, 'w', encoding='utf-8') as fout:
-        for candidate in new_data:
-            fout.write(json.dumps(candidate, ensure_ascii=False) + "\n")
-    print(f"Processed {len(new_data)} candidate instances. Saved to {output_path}")
-
-def parse_arguments():
-    parser = argparse.ArgumentParser(
-        description="Data Construction",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    
-    parser.add_argument("-i", "--input", required=True, help="Input File Path", type=str)
-    parser.add_argument("-o", "--output", required=True, help="Output File Path", type=str)
-    
-    return parser.parse_args()
+        for c in all_candidates:
+            fout.write(json.dumps(c, ensure_ascii=False) + "\n")
+    print(f"Saved {len(all_candidates)} candidate instances to {output_path}")
 
 if __name__ == "__main__":
-    args = parse_arguments()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_file", required=True)
+    parser.add_argument("--output_file", required=True)
+    parser.add_argument("--max_incomplete", type=int, default=5)
+    parser.add_argument("--max_noise_with_gold", type=int, default=5)
+    args = parser.parse_args()
 
-    input_path = args.input
-    output_path = args.output
-
-    process_file(input_path, output_path)
+    process_file(args.input_file, args.output_file, args.max_incomplete, args.max_noise_with_gold)

@@ -102,7 +102,7 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-def test(args):
+def test(args: argparse.Namespace):
     query_generator = QueryGenerator(
         model_id="meta-llama/Meta-Llama-3-8B-Instruct",
         cache_dir=args.cache_dir,

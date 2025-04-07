@@ -8,11 +8,10 @@ from transformers import (
     EvalPrediction,
 )
 from transformers.trainer_callback import TrainerCallback
-
-DEFAULT_MAX_LENGTH = 768
+from config import DEBERTA_MAX_LENGTH
 
 class VerifierDataset(Dataset):
-    def __init__(self, questions, batch_history, batch_passages, tokenizer, max_length=DEFAULT_MAX_LENGTH):
+    def __init__(self, questions, batch_history, batch_passages, tokenizer, max_length=DEBERTA_MAX_LENGTH):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.data = []
@@ -49,7 +48,7 @@ class VerifierDataset(Dataset):
         return encoding
 
 class Verifier():
-    def __init__(self, model_id, checkpoint_path, batch_size, max_length=DEFAULT_MAX_LENGTH):
+    def __init__(self, model_id, checkpoint_path, batch_size, max_length=DEBERTA_MAX_LENGTH):
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.model = AutoModelForSequenceClassification.from_pretrained(checkpoint_path, num_labels=1)
         self.model.config.problem_type = "regression"
@@ -89,16 +88,16 @@ class Verifier():
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--checkpoint-path", type=str, help="Checkpoint path for trained model")
+    parser.add_argument("-c", "--checkpoint-path", type=str, required=True, help="Checkpoint path for trained model")
     args = parser.parse_args()
     return args
 
-def test(args):
+def test(args: argparse.Namespace):
     verifier = Verifier(
         model_id="microsoft/DeBERTa-v3-large",
         checkpoint_path=args.checkpoint_path,
         batch_size=8,
-        max_length=DEFAULT_MAX_LENGTH
+        max_length=DEBERTA_MAX_LENGTH
     )
 
     questions = [{

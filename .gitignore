@@ -210,6 +210,6 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/linux,visualstudiocode,python
 
 wandb/
-verifier_results/
+results/
 data/
 logs/

@@ -96,10 +96,16 @@ class QueryGenerator():
         else:
             return generated_text.strip()
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--cache-dir", type=str, help="Cache directory for model")
+    args = parser.parse_args()
+    return args
 
-def test():
+def test(args):
     query_generator = QueryGenerator(
         model_id="meta-llama/Meta-Llama-3-8B-Instruct",
+        cache_dir=args.cache_dir,
         max_gen_length=200,
         temperature=0.7,
         top_p=0.9
@@ -122,4 +128,5 @@ def test():
 
 
 if __name__ == "__main__":
-    test()
+    args = parse_args()
+    test(args)

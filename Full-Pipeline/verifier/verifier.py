@@ -87,11 +87,16 @@ class Verifier():
 
         return batch_preds
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--checkpoint-path", type=str, help="Checkpoint path for trained model")
+    args = parser.parse_args()
+    return args
 
-def test():
+def test(args):
     verifier = Verifier(
         model_id="microsoft/DeBERTa-v3-large",
-        checkpoint_path="results/verifier_results_scaling(0,10)_RankLoss/checkpoint-6606",
+        checkpoint_path=args.checkpoint_path,
         batch_size=8,
         max_length=DEFAULT_MAX_LENGTH
     )
@@ -127,4 +132,5 @@ def test():
         print("\n")
 
 if __name__ == "__main__":
-    test()
+    args = parse_args()
+    test(args)

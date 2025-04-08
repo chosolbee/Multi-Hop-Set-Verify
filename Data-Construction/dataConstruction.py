@@ -4,38 +4,42 @@ import itertools
 import argparse
 
 def compute_metrics(candidate_ids, gold_ids):
-    if not candidate_ids:
+    if not candidate_ids or not gold_ids:
         return 0.0, 0.0
     intersection = len(set(candidate_ids) & set(gold_ids))
-    coverage = intersection / len(gold_ids) if gold_ids else 0.0
-    noise = (len(candidate_ids) - intersection) / len(candidate_ids)
+    coverage = intersection / len(gold_ids)
+    noise = 1 - intersection / len(candidate_ids)
     return coverage, noise
 
 def sample_incomplete_sets(gold_ids, max_samples):
+    if not gold_ids:
+        return set()
     k = len(gold_ids)
-    if k <= 1:
-        return []
     all_subsets = [set(s) for r in range(1, k) for s in itertools.combinations(gold_ids, r)]
     return random.sample(all_subsets, min(len(all_subsets), max_samples))
 
 def sample_noise_only_set(all_ids, gold_ids):
+    if not gold_ids:
+        return set()
     noise_pool = list(set(all_ids) - set(gold_ids))
     if not noise_pool:
         return set()
-    size = random.choice([s for s in range(1, 6) if s <= len(noise_pool)])
+    size = random.randint(1, min(5, len(noise_pool)))
     return set(random.sample(noise_pool, size))
 
 def sample_noise_with_gold_sets(all_ids, gold_ids, max_samples):
+    if not gold_ids:
+        return []
     noise_pool = list(set(all_ids) - set(gold_ids))
+    if not noise_pool:
+        return set()
     results = set()
     while len(results) < max_samples:
-        if not gold_ids:
-            break
-        seed_size = random.choice([s for s in range(1, min(5, len(gold_ids)+1))])
+        seed_size = random.randint(1, min(4, len(gold_ids)))
         seed = set(random.sample(gold_ids, seed_size))
         noise_limit = min(5 - seed_size, 2)
-        noise_count = random.choice([n for n in [1, 2] if n <= noise_limit and n <= len(noise_pool)])
-        noise = set(random.sample(noise_pool, noise_count))
+        noise_size = random.randint(1, min(noise_limit, len(noise_pool)))
+        noise = set(random.sample(noise_pool, noise_size))
         results.add(frozenset(seed | noise))
     return [set(s) for s in results]
 
@@ -101,10 +105,11 @@ def process_file(input_path, output_path, max_incomplete=5, max_noise_with_gold=
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_file", required=True)
-    parser.add_argument("--output_file", required=True)
-    parser.add_argument("--max_incomplete", type=int, default=5)
-    parser.add_argument("--max_noise_with_gold", type=int, default=5)
+    parser.add_argument("--input-path", required=True)
+    parser.add_argument("--output-path", required=True)
+    parser.add_argument("--max-incomplete", type=int, default=5)
+    parser.add_argument("--max-noise-with-gold", type=int, default=5)
+    parser.add_argument("--split", type=str, default="train", choices=["train", "dev", "test"], help="Split to process")
     args = parser.parse_args()
 
-    process_file(args.input_file, args.output_file, args.max_incomplete, args.max_noise_with_gold)
+    process_file(args.input_path, args.output_path, args.max_incomplete, args.max_noise_with_gold)

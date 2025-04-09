@@ -162,6 +162,7 @@ class CustomTrainer(Trainer):
         super().__init__(*args, **kwargs)
         
         self.mse_loss = nn.MSELoss()
+        self.ranking_loss_fn = nn.MarginRankingLoss(margin=self.margin)
 
     def _get_grouped_dataloader(self, dataset, batch_size) -> DataLoader:
         if dataset is None:
@@ -203,7 +204,7 @@ class CustomTrainer(Trainer):
             pred_i = torch.stack([predictions[i] for i, _ in candidate_pairs])
             pred_j = torch.stack([predictions[j] for _, j in candidate_pairs])
             target = torch.ones_like(pred_i)
-            ranking_loss = nn.MarginRankingLoss(margin=self.margin)(pred_i, pred_j, target)
+            ranking_loss = self.ranking_loss_fn(pred_i, pred_j, target)
         else:
             ranking_loss = torch.tensor(0.0, device=predictions.device)
 

@@ -28,7 +28,7 @@ class VerifierDataset(Dataset):
         self.data = []
         question_ids = []
 
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             for line in f:
                 entry = json.loads(line)
                 question = entry["question"]
@@ -39,16 +39,14 @@ class VerifierDataset(Dataset):
                 score = entry["score"] * desired_scale
                 self.data.append({"text": text, "score": score, "question_id": question_id})
                 question_ids.append(question_id)
-        
+
         unique_question_ids = sorted(set(question_ids))
         question_id_to_idx = {question_id: idx for idx, question_id in enumerate(unique_question_ids)}
         for item in self.data:
             item["question_id"] = question_id_to_idx[item["question_id"]]
 
-
     def __len__(self):
         return len(self.data)
-
 
     def __getitem__(self, idx):
         item = self.data[idx]
@@ -75,10 +73,7 @@ def collate_fn(batch):
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
-        "labels": {
-            "labels": labels,
-            "question_ids": question_ids,
-        }
+        "labels": {"labels": labels, "question_ids": question_ids},
     }
 
 
@@ -91,7 +86,6 @@ class Metrics:
         self.map_metric = RetrievalMAP()
         self.mrr_metric = RetrievalMRR()
         self.ndcg_metric = RetrievalNormalizedDCG()
-
 
     def __call__(self, eval_preds: EvalPrediction):
         logits, labels_dict = eval_preds
@@ -119,7 +113,6 @@ class CustomTrainer(Trainer):
 
         self.mse_loss = nn.MSELoss()
 
-
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels_dict = inputs.pop("labels", None)
         print(labels_dict)
@@ -131,7 +124,7 @@ class CustomTrainer(Trainer):
         question_ids = labels_dict["question_ids"]
 
         mse_loss = self.mse_loss(predictions, labels)
-        
+
         # margin = 1.0
         # candidate_pairs = []
         # for i in range(len(labels)):
@@ -147,7 +140,7 @@ class CustomTrainer(Trainer):
         #     margin_loss = torch.tensor(0.0, device=predictions.device)
         # alpha = 0.5
         # loss = mse_loss + alpha * margin_loss
-        
+
         loss = mse_loss
         if return_outputs:
             return (loss, outputs)
@@ -166,7 +159,7 @@ class PrintCallback(TrainerCallback):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Verifier Train")
-    
+
     parser.add_argument("-t", "--train-data-path", help="Training Dataset Path", type=str)
     parser.add_argument("-v", "--eval-data-path", help="Evaluation Dataset Path", type=str)
     parser.add_argument("--trainer-output-dir", help="Training Output Path", type=str)
@@ -180,7 +173,7 @@ def parse_arguments():
     parser.add_argument("--gradient-accumulation-steps", help="Gradient Accumulation Steps", type=int, default=4)
     parser.add_argument("--num-epochs", help="Number of Epochs", type=int, default=3)
     parser.add_argument("--fp16", help="Use FP16", action="store_true")
-    
+
     return parser.parse_args()
 
 
@@ -189,7 +182,7 @@ def main():
 
     model_name = "microsoft/deberta-v3-large"
 
-    local_rank = int(os.environ.get("LOCAL_RANK", -1))    
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if local_rank == -1 or local_rank == 0:  # Only initialize wandb on the main process
         wandb.init(
             project="MultiHopVerifierTraining",
@@ -206,7 +199,7 @@ def main():
                 "gradient_accumulation_steps": args.gradient_accumulation_steps,
                 "epochs": args.num_epochs,
                 "fp16": args.fp16,
-            }
+            },
         )
     else:
         os.environ["WANDB_MODE"] = "disabled"  # Disable wandb for other processes
@@ -214,8 +207,8 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=1, problem_type="regression")
 
-    train_dataset = VerifierDataset(args.train_data_path, tokenizer, max_length=args.max_length, desired_scale=args.desired_scale)
-    eval_dataset = VerifierDataset(args.eval_data_path, tokenizer, max_length=args.max_length, desired_scale=args.desired_scale)
+    train_dataset = VerifierDataset(args.train_data_path, tokenizer, args.max_length, args.desired_scale)
+    eval_dataset = VerifierDataset(args.eval_data_path, tokenizer, args.max_length, args.desired_scale)
     training_args = TrainingArguments(
         output_dir=args.trainer_output_dir,
         learning_rate=args.learning_rate,
@@ -227,7 +220,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_train_epochs=args.num_epochs,
         evaluation_strategy="steps",
-        eval_steps=5,
+        eval_steps=500,
         save_steps=500,
         logging_steps=100,
         report_to=["wandb"],
@@ -236,7 +229,7 @@ def main():
     )
 
     compute_metrics = Metrics(desired_scale=args.desired_scale)
-    
+
     trainer = CustomTrainer(
         model=model,
         args=training_args,

@@ -4,8 +4,8 @@ import argparse
 import torch
 import numpy as np
 from torch.utils.data import Dataset, random_split, DataLoader
-from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score
-from torchmetrics.retrieval import RetrievalMAP, RetrievalMRR, RetrievalNormalizedDCG
+from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score, SpearmanCorrCoef, KendallRankCorrCoef
+from torchmetrics.retrieval import RetrievalMRR, RetrievalNormalizedDCG
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -80,12 +80,14 @@ def collate_fn(batch):
 class Metrics:
     def __init__(self, desired_scale=1):
         self.desired_scale = desired_scale
+
         self.mse_metric = MeanSquaredError()
         self.mae_metric = MeanAbsoluteError()
         self.r2_metric = R2Score()
-        self.map_metric = RetrievalMAP()
         self.mrr_metric = RetrievalMRR()
         self.ndcg_metric = RetrievalNormalizedDCG()
+        self.spearman_metric = SpearmanCorrCoef()
+        self.kendall_metric = KendallRankCorrCoef()
 
     def __call__(self, eval_preds: EvalPrediction):
         logits, labels_dict = eval_preds
@@ -96,13 +98,30 @@ class Metrics:
         predictions = torch.sigmoid(logits)
         labels = labels / self.desired_scale
 
+        spearman_scores = []
+        kendall_scores = []
+        correct = total = 0
+
+        for idx in indexes.unique():
+            p = predictions[indexes == idx]
+            l = labels[indexes == idx]
+            spearman_scores.append(self.spearman_metric(p, l).item())
+            kendall_scores.append(self.kendall_metric(p, l).item())
+            for i in range(len(l)):
+                for j in range(i + 1, len(l)):
+                    if (l[i] > l[j]) == (p[i] > p[j]):
+                        correct += 1
+                    total += 1
+
         return {
             "mse": self.mse_metric(predictions, labels).item(),
             "mae": self.mae_metric(predictions, labels).item(),
             "r2": self.r2_metric(predictions, labels).item(),
-            "map": self.map_metric(predictions, labels, indexes).item(),
             "mrr": self.mrr_metric(predictions, labels, indexes).item(),
             "ndcg": self.ndcg_metric(predictions, labels, indexes).item(),
+            "spearman": np.nanmean(spearman_scores),
+            "kendall": np.nanmean(kendall_scores),
+            "pairwise_accuracy": correct / total if total > 0 else 0,
         }
 
 
@@ -122,25 +141,12 @@ class CustomTrainer(Trainer):
         labels = labels_dict["labels"]
         question_ids = labels_dict["question_ids"]
 
-        mse_loss = self.mse_loss(predictions, labels)
+        mse = self.mse_loss(predictions, labels)
 
-        # margin = 1.0
-        # candidate_pairs = []
-        # for i in range(len(labels)):
-        #     for j in range(len(labels)):
-        #         if labels[i] > labels[j]:
-        #             candidate_pairs.append((i, j))
-        # if candidate_pairs:
-        #     pred_i = torch.stack([predictions[i] for i, j in candidate_pairs])
-        #     pred_j = torch.stack([predictions[j] for i, j in candidate_pairs])
-        #     target = torch.ones_like(pred_i)
-        #     margin_loss = nn.MarginRankingLoss(margin=margin)(pred_i, pred_j, target)
-        # else:
-        #     margin_loss = torch.tensor(0.0, device=predictions.device)
-        # alpha = 0.5
-        # loss = mse_loss + alpha * margin_loss
+        # TODO: Ranking Loss
 
-        loss = mse_loss
+        loss = mse
+
         if return_outputs:
             return (loss, outputs)
         else:
@@ -232,6 +238,7 @@ def main():
     train_dataset = VerifierDataset(args.train_data_path, tokenizer, args.max_length, args.desired_scale)
     eval_dataset = VerifierDataset(args.eval_data_path, tokenizer, args.max_length, args.desired_scale)
 
+    print_callback = PrintCallback()
     compute_metrics = Metrics(desired_scale=args.desired_scale)
 
     trainer = CustomTrainer(
@@ -242,17 +249,16 @@ def main():
         tokenizer=tokenizer,
         data_collator=collate_fn,
         compute_metrics=compute_metrics,
-        callbacks=[PrintCallback()],
+        callbacks=[print_callback],
         desired_scale=args.desired_scale,
     )
 
     trainer.train()
 
+    print("Training completed. Evaluating on test dataset...")
+
     test_dataset = VerifierDataset(args.test_data_path, tokenizer, args.max_length, args.desired_scale)
     test_metrics = trainer.evaluate(test_dataset)
-    for key, value in test_metrics.items():
-        wandb.log({f"test_{key}": value})
-        print(f"Test {key}: {value:.4f}")
 
     wandb.finish()
 

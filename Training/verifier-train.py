@@ -115,7 +115,6 @@ class CustomTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels_dict = inputs.pop("labels", None)
-        print(labels_dict)
 
         outputs = model(**inputs)
 
@@ -160,8 +159,9 @@ class PrintCallback(TrainerCallback):
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Verifier Train")
 
-    parser.add_argument("-t", "--train-data-path", help="Training Dataset Path", type=str)
-    parser.add_argument("-v", "--eval-data-path", help="Evaluation Dataset Path", type=str)
+    parser.add_argument("--train-data-path", help="Training Dataset Path", type=str, required=True)
+    parser.add_argument("--eval-data-path", help="Evaluation Dataset Path", type=str, required=True)
+    parser.add_argument("--test-data-path", help="Test Dataset Path", type=str, required=True)
     parser.add_argument("--trainer-output-dir", help="Training Output Path", type=str)
     parser.add_argument("--max-length", help="Max Length of Tokenizer", type=int, default=DEBERTA_MAX_LENGTH)
     parser.add_argument("--desired-scale", help="Desired Scale", type=int, default=1)
@@ -207,8 +207,6 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=1, problem_type="regression")
 
-    train_dataset = VerifierDataset(args.train_data_path, tokenizer, args.max_length, args.desired_scale)
-    eval_dataset = VerifierDataset(args.eval_data_path, tokenizer, args.max_length, args.desired_scale)
     training_args = TrainingArguments(
         output_dir=args.trainer_output_dir,
         learning_rate=args.learning_rate,
@@ -225,8 +223,14 @@ def main():
         logging_steps=100,
         report_to=["wandb"],
         load_best_model_at_end=True,
+        save_total_limit=3,
+        metric_for_best_model="mse",
+        greater_is_better=False,
         fp16=args.fp16,
     )
+
+    train_dataset = VerifierDataset(args.train_data_path, tokenizer, args.max_length, args.desired_scale)
+    eval_dataset = VerifierDataset(args.eval_data_path, tokenizer, args.max_length, args.desired_scale)
 
     compute_metrics = Metrics(desired_scale=args.desired_scale)
 
@@ -241,7 +245,14 @@ def main():
         callbacks=[PrintCallback()],
         desired_scale=args.desired_scale,
     )
+
     trainer.train()
+
+    test_dataset = VerifierDataset(args.test_data_path, tokenizer, args.max_length, args.desired_scale)
+    test_metrics = trainer.evaluate(test_dataset)
+    for key, value in test_metrics.items():
+        wandb.log({f"test_{key}": value})
+        print(f"Test {key}: {value:.4f}")
 
     wandb.finish()
 

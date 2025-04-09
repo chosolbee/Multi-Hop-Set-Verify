@@ -17,12 +17,14 @@ def process_data(input_path, output_path, alpha=0.3):
             data["score"] = score
 
             fout.write(json.dumps(data, ensure_ascii=False) + "\n")
+    
+    print(f"Processed data and saved to {output_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compute score using affine combination of Precision and Recall.")
-    parser.add_argument("--input_file", required=True, help="Path to input JSONL file")
-    parser.add_argument("--output_file", required=True, help="Path to output JSONL file")
+    parser.add_argument("--input-path", required=True, help="Path to input JSONL file")
+    parser.add_argument("--output-path", required=True, help="Path to output JSONL file")
     parser.add_argument("--alpha", type=float, default=0.3, help="Alpha value for weighting Precision vs Recall (default: 0.3)")
 
     args = parser.parse_args()
-    process_data(args.input_file, args.output_file, args.alpha)
+    process_data(args.input_path, args.output_path, args.alpha)

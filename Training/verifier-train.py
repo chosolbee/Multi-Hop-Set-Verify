@@ -4,7 +4,7 @@ import argparse
 import torch
 import numpy as np
 from torch.utils.data import Dataset, random_split, DataLoader, Sampler
-from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score, SpearmanCorrCoef, KendallRankCorrCoef
+from torchmetrics.functional.regression import mean_squared_error, mean_absolute_error, r2_score, spearman_corrcoef, kendall_rank_corrcoef
 from torchmetrics.retrieval import RetrievalMRR, RetrievalNormalizedDCG
 from transformers import (
     AutoTokenizer,
@@ -111,13 +111,8 @@ class Metrics:
         self.desired_scale = desired_scale
         self.compute_ranking = compute_ranking
 
-        self.mse_metric = MeanSquaredError()
-        self.mae_metric = MeanAbsoluteError()
-        self.r2_metric = R2Score()
         self.mrr_metric = RetrievalMRR()
         self.ndcg_metric = RetrievalNormalizedDCG()
-        self.spearman_metric = SpearmanCorrCoef()
-        self.kendall_metric = KendallRankCorrCoef()
 
     def __call__(self, eval_preds: EvalPrediction):
         logits, labels_dict = eval_preds
@@ -128,37 +123,41 @@ class Metrics:
         predictions = torch.sigmoid(logits)
         labels = labels / self.desired_scale
 
-        results = {
-            "mse": self.mse_metric(predictions, labels).item(),
-            "mae": self.mae_metric(predictions, labels).item(),
-            "r2": self.r2_metric(predictions, labels).item(),
+        spearman_scores = []
+        kendall_scores = []
+        correct = total = 0
+
+        for idx in torch.unique(indexes):
+            mask = indexes == idx
+            p = predictions[mask]
+            l = labels[mask]
+
+            if len(p) < 2:
+                continue
+
+            spearman_scores.append(spearman_corrcoef(p, l).item())
+            kendall_scores.append(kendall_rank_corrcoef(p, l).item())
+
+            pred_diff = p.unsqueeze(0) - p.unsqueeze(1)
+            label_diff = l.unsqueeze(0) - l.unsqueeze(1)
+
+            pred_sign = torch.sign(pred_diff)
+            label_sign = torch.sign(label_diff)
+
+            valid_mask = label_sign != 0
+            correct += ((pred_sign == label_sign) & valid_mask).sum().item()
+            total += valid_mask.sum().item()
+
+        return {
+            "mse": mean_squared_error(predictions, labels).item(),
+            "mae": mean_absolute_error(predictions, labels).item(),
+            "r2": r2_score(predictions, labels).item(),
             "mrr": self.mrr_metric(predictions, labels, indexes).item(),
             "ndcg": self.ndcg_metric(predictions, labels, indexes).item(),
+            "spearman": np.nanmean(spearman_scores),
+            "kendall": np.nanmean(kendall_scores),
+            "pairwise_accuracy": correct / total if total > 0 else 0,
         }
-
-        if self.compute_ranking:
-            spearman_scores = []
-            kendall_scores = []
-            correct = total = 0
-            for idx in indexes.unique():
-                p = predictions[indexes == idx]
-                l = labels[indexes == idx]
-                spearman_scores.append(self.spearman_metric(p, l).item())
-                kendall_scores.append(self.kendall_metric(p, l).item())
-                for i in range(len(l)):
-                    for j in range(i + 1, len(l)):
-                        if (l[i] > l[j]) == (p[i] > p[j]):
-                            correct += 1
-                        total += 1
-            results["spearman"] = np.nanmean(spearman_scores)
-            results["kendall"] = np.nanmean(kendall_scores)
-            results["pairwise_accuracy"] = correct / total if total > 0 else 0
-        else:
-            results["spearman"] = None
-            results["kendall"] = None
-            results["pairwise_accuracy"] = None
-
-        return results
 
 
 class CustomTrainer(Trainer):
@@ -303,7 +302,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_train_epochs=args.num_epochs,
         evaluation_strategy="steps",
-        eval_steps=500,
+        eval_steps=1,
         save_steps=500,
         logging_steps=100,
         report_to=["wandb"],

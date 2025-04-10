@@ -203,7 +203,7 @@ class CustomTrainer(Trainer):
 
         # margin ranking loss
         candidate_pairs = []
-        
+
         for i in range(len(labels)):
             for j in range(len(labels)):
                 if labels[i] > labels[j]:
@@ -230,7 +230,10 @@ class PrintCallback(TrainerCallback):
         if logs is not None:
             print(f"\n[Step {state.global_step}]")
             for key, value in logs.items():
-                print(f"  {key}: {value:.4f}")
+                if value is None:
+                    print(f"  {key}: None")
+                else:
+                    print(f"  {key}: {value:.4f}")
             print("-" * 40)
 
 
@@ -334,7 +337,7 @@ def main():
     trainer.train()
 
     print("Training completed. Evaluating on test dataset...")
-    compute_metrics.compute_ranking = True
+    trainer.compute_metrics = Metrics(desired_scale=args.desired_scale, compute_ranking=True)
 
     test_dataset = VerifierDataset(args.test_data_path, tokenizer, args.max_length, args.desired_scale)
     test_metrics = trainer.evaluate(test_dataset)

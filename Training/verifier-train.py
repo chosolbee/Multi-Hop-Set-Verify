@@ -180,19 +180,6 @@ class CustomTrainer(Trainer):
             num_workers=self.args.dataloader_num_workers,
         )
 
-    def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
-        if eval_dataset is None:
-            eval_dataset = self.eval_dataset
-        
-        return DataLoader(
-            eval_dataset,
-            batch_size=self.args.per_device_eval_batch_size,
-            shuffle=False,
-            collate_fn=self.data_collator,
-            num_workers=self.args.dataloader_num_workers,
-        )
-
-
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels_dict = inputs.pop("labels", None)
 
@@ -200,7 +187,6 @@ class CustomTrainer(Trainer):
 
         predictions = torch.sigmoid(outputs.logits.squeeze(-1)) * self.desired_scale
         labels = labels_dict["labels"]
-        question_ids = labels_dict["question_ids"]
 
         mse = self.mse_loss(predictions, labels)
 

@@ -302,7 +302,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_train_epochs=args.num_epochs,
         evaluation_strategy="steps",
-        eval_steps=1,
+        eval_steps=500,
         save_steps=500,
         logging_steps=100,
         report_to=["wandb"],

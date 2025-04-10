@@ -219,10 +219,7 @@ class PrintCallback(TrainerCallback):
         if logs is not None:
             print(f"\n[Step {state.global_step}]")
             for key, value in logs.items():
-                if value is None:
-                    print(f"  {key}: None")
-                else:
-                    print(f"  {key}: {value:.4f}")
+                print(f"  {key}: {value:.4f}")
             print("-" * 40)
 
 

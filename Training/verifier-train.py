@@ -3,8 +3,8 @@ import json
 import argparse
 import torch
 import numpy as np
-from torch.utils.data import Dataset, random_split, DataLoader
-from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score, SpearmanCorrCoef, KendallRankCorrCoef
+from torch.utils.data import Dataset, random_split, DataLoader, Sampler
+from torchmetrics.functional.regression import mean_squared_error, mean_absolute_error, r2_score, spearman_corrcoef, kendall_rank_corrcoef
 from torchmetrics.retrieval import RetrievalMRR, RetrievalNormalizedDCG
 from transformers import (
     AutoTokenizer,
@@ -18,7 +18,8 @@ from transformers.trainer_utils import PredictionOutput
 from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
 import torch.nn as nn
 import wandb
-
+import random
+from collections import defaultdict
 
 class VerifierDataset(Dataset):
     def __init__(self, filepath, tokenizer, max_length=768, desired_scale=1):
@@ -64,6 +65,34 @@ class VerifierDataset(Dataset):
         }
         return encoding
 
+class GroupSampler(Sampler):
+    def __init__(self, dataset, batch_size):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.groups = defaultdict(list)
+        for idx in range(len(dataset)):
+            item = dataset[idx]
+            q_id = int(item["labels"]["question_id"]) if torch.is_tensor(item["labels"]["question_id"]) else item["labels"]["question_id"]
+            self.groups[q_id].append(idx)
+        self.group_list = list(self.groups.values())
+
+    def __iter__(self):
+        all_batches = []
+        for group in self.group_list:
+            random.shuffle(group) 
+            for i in range(0, len(group), self.batch_size):
+                batch = group[i:i + self.batch_size]
+                all_batches.append(batch)
+        random.shuffle(all_batches)  
+        for batch in all_batches:
+            yield batch
+
+    def __len__(self):
+        total_batches = 0
+        for group in self.group_list:
+            total_batches += (len(group) + self.batch_size - 1) // self.batch_size
+        return total_batches
+
 
 def collate_fn(batch):
     input_ids = torch.stack([x["input_ids"] for x in batch])
@@ -81,13 +110,8 @@ class Metrics:
     def __init__(self, desired_scale=1):
         self.desired_scale = desired_scale
 
-        self.mse_metric = MeanSquaredError()
-        self.mae_metric = MeanAbsoluteError()
-        self.r2_metric = R2Score()
         self.mrr_metric = RetrievalMRR()
         self.ndcg_metric = RetrievalNormalizedDCG()
-        self.spearman_metric = SpearmanCorrCoef()
-        self.kendall_metric = KendallRankCorrCoef()
 
     def __call__(self, eval_preds: EvalPrediction):
         logits, labels_dict = eval_preds
@@ -102,21 +126,31 @@ class Metrics:
         kendall_scores = []
         correct = total = 0
 
-        for idx in indexes.unique():
-            p = predictions[indexes == idx]
-            l = labels[indexes == idx]
-            spearman_scores.append(self.spearman_metric(p, l).item())
-            kendall_scores.append(self.kendall_metric(p, l).item())
-            for i in range(len(l)):
-                for j in range(i + 1, len(l)):
-                    if (l[i] > l[j]) == (p[i] > p[j]):
-                        correct += 1
-                    total += 1
+        for idx in torch.unique(indexes):
+            mask = indexes == idx
+            p = predictions[mask]
+            l = labels[mask]
+
+            if len(p) < 2:
+                continue
+
+            spearman_scores.append(spearman_corrcoef(p, l).item())
+            kendall_scores.append(kendall_rank_corrcoef(p, l).item())
+
+            pred_diff = p.unsqueeze(0) - p.unsqueeze(1)
+            label_diff = l.unsqueeze(0) - l.unsqueeze(1)
+
+            pred_sign = torch.sign(pred_diff)
+            label_sign = torch.sign(label_diff)
+
+            valid_mask = label_sign != 0
+            correct += ((pred_sign == label_sign) & valid_mask).sum().item()
+            total += valid_mask.sum().item()
 
         return {
-            "mse": self.mse_metric(predictions, labels).item(),
-            "mae": self.mae_metric(predictions, labels).item(),
-            "r2": self.r2_metric(predictions, labels).item(),
+            "mse": mean_squared_error(predictions, labels).item(),
+            "mae": mean_absolute_error(predictions, labels).item(),
+            "r2": r2_score(predictions, labels).item(),
             "mrr": self.mrr_metric(predictions, labels, indexes).item(),
             "ndcg": self.ndcg_metric(predictions, labels, indexes).item(),
             "spearman": np.nanmean(spearman_scores),
@@ -128,9 +162,23 @@ class Metrics:
 class CustomTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.desired_scale = kwargs.pop("desired_scale", 1)
+        self.margin = kwargs.pop("margin", 0.1)
+        self.alpha = kwargs.pop("alpha", 0.1)
         super().__init__(*args, **kwargs)
-
+        
         self.mse_loss = nn.MSELoss()
+        self.ranking_loss_fn = nn.MarginRankingLoss(margin=self.margin)
+
+    def get_train_dataloader(self) -> DataLoader:
+        if self.train_dataset is None:
+            raise ValueError("Trainer: Provided train_dataset is None")
+        
+        return DataLoader(
+            self.train_dataset,
+            batch_sampler=GroupSampler(self.train_dataset, self.args.per_device_train_batch_size),
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+        )
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels_dict = inputs.pop("labels", None)
@@ -139,13 +187,26 @@ class CustomTrainer(Trainer):
 
         predictions = torch.sigmoid(outputs.logits.squeeze(-1)) * self.desired_scale
         labels = labels_dict["labels"]
-        question_ids = labels_dict["question_ids"]
 
         mse = self.mse_loss(predictions, labels)
 
-        # TODO: Ranking Loss
+        # margin ranking loss
+        candidate_pairs = []
 
-        loss = mse
+        for i in range(len(labels)):
+            for j in range(len(labels)):
+                if labels[i] > labels[j]:
+                    candidate_pairs.append((i, j))
+
+        if candidate_pairs:
+            pred_i = torch.stack([predictions[i] for i, _ in candidate_pairs])
+            pred_j = torch.stack([predictions[j] for _, j in candidate_pairs])
+            target = torch.ones_like(pred_i)
+            ranking_loss = self.ranking_loss_fn(pred_i, pred_j, target)
+        else:
+            ranking_loss = torch.tensor(0.0, device=predictions.device)
+
+        loss = mse + self.alpha * ranking_loss
 
         if return_outputs:
             return (loss, outputs)
@@ -179,6 +240,8 @@ def parse_arguments():
     parser.add_argument("--gradient-accumulation-steps", help="Gradient Accumulation Steps", type=int, default=4)
     parser.add_argument("--num-epochs", help="Number of Epochs", type=int, default=3)
     parser.add_argument("--fp16", help="Use FP16", action="store_true")
+    parser.add_argument("--margin", help="Margin for Ranking Loss", type=float, default=0.1)
+    parser.add_argument("--alpha", help="Weight for Ranking Loss", type=float, default=0.1)
 
     return parser.parse_args()
 
@@ -205,6 +268,8 @@ def main():
                 "gradient_accumulation_steps": args.gradient_accumulation_steps,
                 "epochs": args.num_epochs,
                 "fp16": args.fp16,
+                "margin": args.margin,
+                "alpha": args.alpha,
             },
         )
     else:
@@ -251,11 +316,14 @@ def main():
         compute_metrics=compute_metrics,
         callbacks=[print_callback],
         desired_scale=args.desired_scale,
+        margin=args.margin,
+        alpha=args.alpha,
     )
 
     trainer.train()
 
     print("Training completed. Evaluating on test dataset...")
+    trainer.compute_metrics = Metrics(desired_scale=args.desired_scale)
 
     test_dataset = VerifierDataset(args.test_data_path, tokenizer, args.max_length, args.desired_scale)
     test_metrics = trainer.evaluate(test_dataset)

@@ -107,9 +107,8 @@ def collate_fn(batch):
 
 
 class Metrics:
-    def __init__(self, desired_scale=1, compute_ranking=False):
+    def __init__(self, desired_scale=1):
         self.desired_scale = desired_scale
-        self.compute_ranking = compute_ranking
 
         self.mrr_metric = RetrievalMRR()
         self.ndcg_metric = RetrievalNormalizedDCG()
@@ -170,23 +169,28 @@ class CustomTrainer(Trainer):
         self.mse_loss = nn.MSELoss()
         self.ranking_loss_fn = nn.MarginRankingLoss(margin=self.margin)
 
-    def _get_grouped_dataloader(self, dataset, batch_size) -> DataLoader:
-        if dataset is None:
-            raise ValueError("Trainer: Provided dataset is None")
+    def get_train_dataloader(self) -> DataLoader:
+        if self.train_dataset is None:
+            raise ValueError("Trainer: Provided train_dataset is None")
+        
         return DataLoader(
-            dataset,
-            batch_sampler=GroupSampler(dataset, batch_size),
+            self.train_dataset,
+            batch_sampler=GroupSampler(self.train_dataset, self.args.per_device_train_batch_size),
             collate_fn=self.data_collator,
             num_workers=self.args.dataloader_num_workers,
         )
 
-    def get_train_dataloader(self) -> DataLoader:
-        return self._get_grouped_dataloader(self.train_dataset, self.args.per_device_train_batch_size)
-
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
         if eval_dataset is None:
             eval_dataset = self.eval_dataset
-        return self._get_grouped_dataloader(eval_dataset, self.args.per_device_eval_batch_size)
+        
+        return DataLoader(
+            eval_dataset,
+            batch_size=self.args.per_device_eval_batch_size,
+            shuffle=False,
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+        )
 
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
@@ -317,7 +321,7 @@ def main():
     eval_dataset = VerifierDataset(args.eval_data_path, tokenizer, args.max_length, args.desired_scale)
 
     print_callback = PrintCallback()
-    compute_metrics = Metrics(desired_scale=args.desired_scale, compute_ranking=False)
+    compute_metrics = Metrics(desired_scale=args.desired_scale)
 
     trainer = CustomTrainer(
         model=model,
@@ -336,7 +340,7 @@ def main():
     trainer.train()
 
     print("Training completed. Evaluating on test dataset...")
-    trainer.compute_metrics = Metrics(desired_scale=args.desired_scale, compute_ranking=True)
+    trainer.compute_metrics = Metrics(desired_scale=args.desired_scale)
 
     test_dataset = VerifierDataset(args.test_data_path, tokenizer, args.max_length, args.desired_scale)
     test_metrics = trainer.evaluate(test_dataset)

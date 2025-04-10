@@ -107,8 +107,9 @@ def collate_fn(batch):
 
 
 class Metrics:
-    def __init__(self, desired_scale=1):
+    def __init__(self, desired_scale=1, compute_ranking=False):
         self.desired_scale = desired_scale
+        self.compute_ranking = compute_ranking
 
         self.mse_metric = MeanSquaredError()
         self.mae_metric = MeanAbsoluteError()
@@ -127,31 +128,37 @@ class Metrics:
         predictions = torch.sigmoid(logits)
         labels = labels / self.desired_scale
 
-        spearman_scores = []
-        kendall_scores = []
-        correct = total = 0
-
-        for idx in indexes.unique():
-            p = predictions[indexes == idx]
-            l = labels[indexes == idx]
-            spearman_scores.append(self.spearman_metric(p, l).item())
-            kendall_scores.append(self.kendall_metric(p, l).item())
-            for i in range(len(l)):
-                for j in range(i + 1, len(l)):
-                    if (l[i] > l[j]) == (p[i] > p[j]):
-                        correct += 1
-                    total += 1
-
-        return {
+        results = {
             "mse": self.mse_metric(predictions, labels).item(),
             "mae": self.mae_metric(predictions, labels).item(),
             "r2": self.r2_metric(predictions, labels).item(),
             "mrr": self.mrr_metric(predictions, labels, indexes).item(),
             "ndcg": self.ndcg_metric(predictions, labels, indexes).item(),
-            "spearman": np.nanmean(spearman_scores),
-            "kendall": np.nanmean(kendall_scores),
-            "pairwise_accuracy": correct / total if total > 0 else 0,
         }
+
+        if self.compute_ranking:
+            spearman_scores = []
+            kendall_scores = []
+            correct = total = 0
+            for idx in indexes.unique():
+                p = predictions[indexes == idx]
+                l = labels[indexes == idx]
+                spearman_scores.append(self.spearman_metric(p, l).item())
+                kendall_scores.append(self.kendall_metric(p, l).item())
+                for i in range(len(l)):
+                    for j in range(i + 1, len(l)):
+                        if (l[i] > l[j]) == (p[i] > p[j]):
+                            correct += 1
+                        total += 1
+            results["spearman"] = np.nanmean(spearman_scores)
+            results["kendall"] = np.nanmean(kendall_scores)
+            results["pairwise_accuracy"] = correct / total if total > 0 else 0
+        else:
+            results["spearman"] = None
+            results["kendall"] = None
+            results["pairwise_accuracy"] = None
+
+        return results
 
 
 class CustomTrainer(Trainer):
@@ -196,10 +203,12 @@ class CustomTrainer(Trainer):
 
         # margin ranking loss
         candidate_pairs = []
+        
         for i in range(len(labels)):
             for j in range(len(labels)):
                 if labels[i] > labels[j]:
                     candidate_pairs.append((i, j))
+
         if candidate_pairs:
             pred_i = torch.stack([predictions[i] for i, _ in candidate_pairs])
             pred_j = torch.stack([predictions[j] for _, j in candidate_pairs])
@@ -306,7 +315,7 @@ def main():
     eval_dataset = VerifierDataset(args.eval_data_path, tokenizer, args.max_length, args.desired_scale)
 
     print_callback = PrintCallback()
-    compute_metrics = Metrics(desired_scale=args.desired_scale)
+    compute_metrics = Metrics(desired_scale=args.desired_scale, compute_ranking=False)
 
     trainer = CustomTrainer(
         model=model,
@@ -325,6 +334,7 @@ def main():
     trainer.train()
 
     print("Training completed. Evaluating on test dataset...")
+    compute_metrics.compute_ranking = True
 
     test_dataset = VerifierDataset(args.test_data_path, tokenizer, args.max_length, args.desired_scale)
     test_metrics = trainer.evaluate(test_dataset)

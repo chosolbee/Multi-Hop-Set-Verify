@@ -1,3 +1,4 @@
+import argparse
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments, EvalPrediction
@@ -72,7 +73,8 @@ class Verifier:
         test_dataset = VerifierDataset(questions, batch_history, batch_passages, self.tokenizer, self.max_length)
     
         predictions_output = self.trainer.predict(test_dataset)
-        all_preds = predictions_output.predictions.flatten()
+        all_logits = predictions_output.predictions.flatten()
+        all_preds = torch.sigmoid(torch.tensor(all_logits)).numpy()
 
         batch_preds = []
         for i in range(len(questions)):

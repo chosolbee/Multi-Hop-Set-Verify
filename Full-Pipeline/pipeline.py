@@ -98,7 +98,7 @@ def run_batch(retriever, query_generator, verifier, questions, max_iterations=5,
     f1_list = [[], [], []]
 
     for question, history in zip(final_questions, final_batch_history):
-        question_id = question["id"]
+        question_id = question["question_id"]
         correct = sum(int(question_id in doc["id"]) for doc in history)
         num_hops = int(question_id[0])  # len(question["question_decomposition"])
         num_retrieval = len(history)

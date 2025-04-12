@@ -29,7 +29,7 @@ python3 Full-Pipeline/verifier/verifier.py \
 # Run the full pipeline
 python3 -m Full-Pipeline.pipeline \
     --passages "path_to_corpus" \
-    --embeddings "directory_to_save_embeddings" \
-    --questions Full-Pipeline/musique_questions.jsonl \
+    --embeddings "directory_with_embeddings" \
+    --questions "path_to_questions" \
     --verifier-checkpoint-path "verifier_checkpoint_path"
 ```

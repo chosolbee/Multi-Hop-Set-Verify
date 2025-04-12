@@ -27,7 +27,7 @@ def print_results(em_list, precision_list, recall_list, f1_list):
     print("\n")
 
 
-def run_batch(retriever, query_generator, verifier, questions, max_iterations=5, max_search=10, verifier_threshold=0.9):
+def run_batch(retriever, query_generator, verifier, questions, max_iterations=5, max_search=10, verifier_threshold=0.9, log_trace=False):
     final_questions = []
     final_batch_history = []
 
@@ -41,16 +41,17 @@ def run_batch(retriever, query_generator, verifier, questions, max_iterations=5,
         batch_docs = retriever.search(queries, max_search)
         batch_scores = verifier.batch_verify(questions, batch_history, batch_docs)
 
-        for question, query, history, docs, scores in zip(questions, queries, batch_history, batch_docs, batch_scores):
-            print(f"1. Question: {question['question']}")
-            print("2. History:")
-            for doc in history:
-                print(f"  Passage: {doc['text']}")
-            print(f"3. Generated query: {query}")
-            print("4. Retrieved passages and scores:")
-            for doc, score in zip(docs, scores):
-                print(f"  Score: {score:.2f} | Passage: {doc['text']}")
-            print("\n")
+        if log_trace:
+            for question, query, history, docs, scores in zip(questions, queries, batch_history, batch_docs, batch_scores):
+                print(f"1. Question: {question['question']}")
+                print("2. History:")
+                for doc in history:
+                    print(f"  Passage: {doc['text']}")
+                print(f"3. Generated query: {query}")
+                print("4. Retrieved passages and scores:")
+                for doc, score in zip(docs, scores):
+                    print(f"  Score: {score:.2f} | Passage: {doc['text']}")
+                print("\n")
 
         next_questions = []
         next_batch_history = []
@@ -82,13 +83,14 @@ def run_batch(retriever, query_generator, verifier, questions, max_iterations=5,
             final_batch_history.extend(batch_history)
             break
 
-    print("\nFinal Questions and History:\n")
-    for question, history in zip(final_questions, final_batch_history):
-        print(f"1. Question: {question['question']}")
-        print("2. History:")
-        for doc in history:
-            print(f"  Passage: {doc['text']}")
-        print("\n")
+    if log_trace:
+        print("\nFinal Questions and History:\n")
+        for question, history in zip(final_questions, final_batch_history):
+            print(f"1. Question: {question['question']}")
+            print("2. History:")
+            for doc in history:
+                print(f"  Passage: {doc['text']}")
+            print("\n")
 
     em_list = [[], [], []]
     precision_list = [[], [], []]
@@ -104,7 +106,7 @@ def run_batch(retriever, query_generator, verifier, questions, max_iterations=5,
         precision_list[num_hops - 2].append(correct / num_retrieval)
         recall_list[num_hops - 2].append(correct / num_hops)
         f1_list[num_hops - 2].append(2 * correct / (num_hops + num_retrieval))
-    
+
     print_results(em_list, precision_list, recall_list, f1_list)
 
     return em_list, precision_list, recall_list, f1_list
@@ -134,6 +136,7 @@ def parse_args():
     main_group.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--verifier-threshold", type=float, default=0.9, help="Threshold for verifier scores")
+    main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
     args = parser.parse_args()
     return args
 
@@ -179,7 +182,16 @@ def main(args: argparse.Namespace):
     for i in range(0, len(questions), args.batch_size):
         batch_questions = questions[i : i + args.batch_size]
         print(f"Processing batch {i // args.batch_size + 1} of {len(questions) // args.batch_size + 1}...\n")
-        em, precision, recall, f1 = run_batch(retriever, query_generator, verifier, batch_questions)
+        em, precision, recall, f1 = run_batch(
+            retriever=retriever,
+            query_generator=query_generator,
+            verifier=verifier,
+            questions=batch_questions,
+            max_iterations=args.max_iterations,
+            max_search=args.max_search,
+            verifier_threshold=args.verifier_threshold,
+            log_trace=args.log_trace,
+        )
         for j in range(3):
             em_list[j].extend(em[j])
             precision_list[j].extend(precision[j])

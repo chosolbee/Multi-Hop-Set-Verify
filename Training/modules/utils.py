@@ -2,7 +2,7 @@ import torch
 
 
 def batch_gather(preds, labels, indexes=None):
-    if indexes is None:
+    if not indexes:
         return preds.unsqueeze(0), labels.unsqueeze(0), torch.ones_like(preds).unsqueeze(0)
 
     unique_indexes = torch.unique(indexes)

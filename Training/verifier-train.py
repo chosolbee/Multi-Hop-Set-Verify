@@ -205,6 +205,8 @@ class CustomTrainer(Trainer):
             self.loss_fn = LambdaRankLoss(sigma=sigma)
         elif self.loss == "listmle":
             self.loss_fn = ListMLELoss()
+        elif self.loss == "bce":
+            self.loss_fn = nn.BCELoss()
         else:
             raise ValueError(f"Unknown loss function: {self.loss}")
 
@@ -243,6 +245,8 @@ class CustomTrainer(Trainer):
                 loss = self.loss_fn(pred_i, pred_j, target)
             else:
                 loss = torch.tensor(0.0, device=predictions.device)
+        elif self.loss == "bce":
+            loss = self.loss_fn(predictions, labels)
         elif self.loss in ["ranknet", "listnet", "lambdarank", "listmle"]:
             loss = self.loss_fn(predictions, labels, indexes)
         else:
@@ -279,7 +283,7 @@ def parse_arguments():
     parser.add_argument("--gradient-accumulation-steps", help="Gradient Accumulation Steps", type=int, default=4)
     parser.add_argument("--num-epochs", help="Number of Epochs", type=int, default=3)
     parser.add_argument("--fp16", help="Use FP16", action="store_true")
-    parser.add_argument("--loss", help="Loss Function", type=str, default="mse", choices=['mse', 'margin', 'ranknet', 'listnet', 'lambdarank', 'listmle'])
+    parser.add_argument("--loss", help="Loss Function", type=str, default="mse", choices=['mse', 'margin', 'ranknet', 'listnet', 'lambdarank', 'listmle', 'bce'])
     parser.add_argument("--margin", help="Margin for Ranking Loss", type=float, default=0.1)
     parser.add_argument("--sigma", help="Sigma for RankNet or LambdaRank", type=float, default=1.0)
 

@@ -1,10 +1,18 @@
 import os
 import json
 import argparse
-import torch
+from collections import defaultdict
 import numpy as np
-from torch.utils.data import Dataset, random_split, DataLoader, Sampler
-from torchmetrics.functional.regression import mean_squared_error, mean_absolute_error, r2_score, spearman_corrcoef, kendall_rank_corrcoef
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader, Sampler
+from torchmetrics.functional.regression import (
+    mean_squared_error,
+    mean_absolute_error,
+    r2_score,
+    spearman_corrcoef,
+    kendall_rank_corrcoef
+)
 from torchmetrics.retrieval import RetrievalMRR, RetrievalNormalizedDCG
 from transformers import (
     AutoTokenizer,
@@ -14,12 +22,9 @@ from transformers import (
     EvalPrediction,
     TrainerCallback,
 )
-from transformers.trainer_utils import PredictionOutput
-from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
-import torch.nn as nn
 import wandb
-import random
-from collections import defaultdict
+from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
+from .modules import RankNetLoss, ListNetLoss, LambdaRankLoss, ListMLELoss
 
 class VerifierDataset(Dataset):
     def __init__(self, filepath, tokenizer, max_length=768, desired_scale=1):
@@ -67,31 +72,53 @@ class VerifierDataset(Dataset):
 
 class GroupSampler(Sampler):
     def __init__(self, dataset, batch_size):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.groups = defaultdict(list)
-        for idx in range(len(dataset)):
-            item = dataset[idx]
-            q_id = int(item["labels"]["question_id"]) if torch.is_tensor(item["labels"]["question_id"]) else item["labels"]["question_id"]
-            self.groups[q_id].append(idx)
-        self.group_list = list(self.groups.values())
+        # self.batch_size = batch_size
+
+        groups = defaultdict(list)
+        for idx, item in enumerate(dataset):
+            question_id = item["labels"]["question_id"]
+            if torch.is_tensor(question_id):
+                question_id = question_id.item()
+            groups[question_id].append(idx)
+
+        self.groups = groups.values()
 
     def __iter__(self):
-        all_batches = []
-        for group in self.group_list:
-            random.shuffle(group) 
-            for i in range(0, len(group), self.batch_size):
-                batch = group[i:i + self.batch_size]
-                all_batches.append(batch)
-        random.shuffle(all_batches)  
-        for batch in all_batches:
-            yield batch
+        # batch = []
+        # batch_len = 0
+
+        # for group in self.groups:
+        #     random.shuffle(group)
+        #     group_size = len(group)
+        #     if batch_len + group_size > self.batch_size and batch:
+        #         yield batch
+        #         batch = []
+        #         batch_len = 0
+        #     batch.extend(group)
+        #     batch_len += group_size
+
+        # if batch:
+        #     yield batch
+
+        yield from self.groups
 
     def __len__(self):
-        total_batches = 0
-        for group in self.group_list:
-            total_batches += (len(group) + self.batch_size - 1) // self.batch_size
-        return total_batches
+        # count = 0
+        # batch_len = 0
+
+        # for group in self.groups:
+        #     group_size = len(group)
+        #     if batch_len + group_size > self.batch_size and batch_len > 0:
+        #         count += 1
+        #         batch_len = 0
+        #     batch_len += group_size
+
+        # if batch_len > 0:
+        #     count += 1
+
+        # return count
+
+        return len(self.groups)
 
 
 def collate_fn(batch):
@@ -162,17 +189,33 @@ class Metrics:
 class CustomTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.desired_scale = kwargs.pop("desired_scale", 1)
-        self.margin = kwargs.pop("margin", 0.1)
-        self.alpha = kwargs.pop("alpha", 0.1)
+        self.loss = kwargs.pop("loss", "mse")
+        margin = kwargs.pop("margin", 0.1)
+        sigma = kwargs.pop("sigma", 1.0)
+
+        if self.loss == "mse":
+            self.loss_fn = nn.MSELoss()
+        elif self.loss == "margin":
+            self.loss_fn = nn.MarginRankingLoss(margin=margin)
+        elif self.loss == "ranknet":
+            self.loss_fn = RankNetLoss(sigma=sigma)
+        elif self.loss == "listnet":
+            self.loss_fn = ListNetLoss()
+        elif self.loss == "lambdarank":
+            self.loss_fn = LambdaRankLoss(sigma=sigma)
+        elif self.loss == "listmle":
+            self.loss_fn = ListMLELoss()
+        elif self.loss == "bce":
+            self.loss_fn = nn.BCELoss()
+        else:
+            raise ValueError(f"Unknown loss function: {self.loss}")
+
         super().__init__(*args, **kwargs)
-        
-        self.mse_loss = nn.MSELoss()
-        self.ranking_loss_fn = nn.MarginRankingLoss(margin=self.margin)
 
     def get_train_dataloader(self) -> DataLoader:
         if self.train_dataset is None:
             raise ValueError("Trainer: Provided train_dataset is None")
-        
+
         return DataLoader(
             self.train_dataset,
             batch_sampler=GroupSampler(self.train_dataset, self.args.per_device_train_batch_size),
@@ -187,31 +230,31 @@ class CustomTrainer(Trainer):
 
         predictions = torch.sigmoid(outputs.logits.squeeze(-1)) * self.desired_scale
         labels = labels_dict["labels"]
+        indexes = labels_dict["question_ids"]
 
-        mse = self.mse_loss(predictions, labels)
-
-        # margin ranking loss
-        candidate_pairs = []
-
-        for i in range(len(labels)):
-            for j in range(len(labels)):
-                if labels[i] > labels[j]:
-                    candidate_pairs.append((i, j))
-
-        if candidate_pairs:
-            pred_i = torch.stack([predictions[i] for i, _ in candidate_pairs])
-            pred_j = torch.stack([predictions[j] for _, j in candidate_pairs])
-            target = torch.ones_like(pred_i)
-            ranking_loss = self.ranking_loss_fn(pred_i, pred_j, target)
+        if self.loss == "mse":
+            loss = self.loss_fn(predictions, labels)
+        elif self.loss == "margin":
+            labels_diff = labels.unsqueeze(0) - labels.unsqueeze(1)
+            mask = labels_diff > 0
+            if mask.any():
+                i_idx, j_idx = mask.nonzero(as_tuple=True)
+                pred_i = predictions[i_idx]
+                pred_j = predictions[j_idx]
+                target = torch.ones_like(pred_i)
+                loss = self.loss_fn(pred_i, pred_j, target)
+            else:
+                loss = torch.tensor(0.0, device=predictions.device)
+        elif self.loss == "bce":
+            loss = self.loss_fn(predictions, labels)
+        elif self.loss in ["ranknet", "listnet", "lambdarank", "listmle"]:
+            loss = self.loss_fn(predictions, labels, indexes)
         else:
-            ranking_loss = torch.tensor(0.0, device=predictions.device)
-
-        loss = mse + self.alpha * ranking_loss
+            raise ValueError(f"Unknown loss function: {self.loss}")
 
         if return_outputs:
             return (loss, outputs)
-        else:
-            return loss
+        return loss
 
 
 class PrintCallback(TrainerCallback):
@@ -232,16 +275,17 @@ def parse_arguments():
     parser.add_argument("--trainer-output-dir", help="Training Output Path", type=str)
     parser.add_argument("--max-length", help="Max Length of Tokenizer", type=int, default=DEBERTA_MAX_LENGTH)
     parser.add_argument("--desired-scale", help="Desired Scale", type=int, default=1)
-    parser.add_argument("--learning-rate", help="Learning Rate", type=float, default=5e-5)
+    parser.add_argument("--learning-rate", help="Learning Rate", type=float, default=2e-5)
     parser.add_argument("--lr-scheduler-type", help="Learning Rate Scheduler Type", type=str, default="cosine")
     parser.add_argument("--warmup-ratio", help="Warmup Ratio", type=float, default=0.1)
     parser.add_argument("--weight-decay", help="Weight Decay", type=float, default=0.01)
-    parser.add_argument("--batch-size", help="Batch Size", type=int, default=8)
+    parser.add_argument("--batch-size", help="Batch Size", type=int, default=16)
     parser.add_argument("--gradient-accumulation-steps", help="Gradient Accumulation Steps", type=int, default=4)
     parser.add_argument("--num-epochs", help="Number of Epochs", type=int, default=3)
     parser.add_argument("--fp16", help="Use FP16", action="store_true")
+    parser.add_argument("--loss", help="Loss Function", type=str, default="mse", choices=['mse', 'margin', 'ranknet', 'listnet', 'lambdarank', 'listmle', 'bce'])
     parser.add_argument("--margin", help="Margin for Ranking Loss", type=float, default=0.1)
-    parser.add_argument("--alpha", help="Weight for Ranking Loss", type=float, default=0.1)
+    parser.add_argument("--sigma", help="Sigma for RankNet or LambdaRank", type=float, default=1.0)
 
     return parser.parse_args()
 
@@ -268,8 +312,9 @@ def main():
                 "gradient_accumulation_steps": args.gradient_accumulation_steps,
                 "epochs": args.num_epochs,
                 "fp16": args.fp16,
+                "loss": args.loss,
                 "margin": args.margin,
-                "alpha": args.alpha,
+                "sigma": args.sigma,
             },
         )
     else:
@@ -294,9 +339,7 @@ def main():
         logging_steps=100,
         report_to=["wandb"],
         load_best_model_at_end=True,
-        save_total_limit=3,
-        metric_for_best_model="mse",
-        greater_is_better=False,
+        ddp_find_unused_parameters=False,
         fp16=args.fp16,
     )
 
@@ -316,17 +359,21 @@ def main():
         compute_metrics=compute_metrics,
         callbacks=[print_callback],
         desired_scale=args.desired_scale,
+        loss=args.loss,
         margin=args.margin,
-        alpha=args.alpha,
+        sigma=args.sigma,
     )
 
     trainer.train()
 
-    print("Training completed. Evaluating on test dataset...")
-    trainer.compute_metrics = Metrics(desired_scale=args.desired_scale)
+    print("Training completed. Evaluating on test dataset...\n")
 
     test_dataset = VerifierDataset(args.test_data_path, tokenizer, args.max_length, args.desired_scale)
-    test_metrics = trainer.evaluate(test_dataset)
+    _, _, metrics = trainer.predict(test_dataset)
+
+    print("Test Metrics:")
+    for key, value in metrics.items():
+        print(f"{key}: {value:.4f}")
 
     wandb.finish()
 

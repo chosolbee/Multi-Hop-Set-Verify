@@ -84,40 +84,9 @@ class GroupSampler(Sampler):
         self.groups = groups.values()
 
     def __iter__(self):
-        # batch = []
-        # batch_len = 0
-
-        # for group in self.groups:
-        #     random.shuffle(group)
-        #     group_size = len(group)
-        #     if batch_len + group_size > self.batch_size and batch:
-        #         yield batch
-        #         batch = []
-        #         batch_len = 0
-        #     batch.extend(group)
-        #     batch_len += group_size
-
-        # if batch:
-        #     yield batch
-
         yield from self.groups
 
     def __len__(self):
-        # count = 0
-        # batch_len = 0
-
-        # for group in self.groups:
-        #     group_size = len(group)
-        #     if batch_len + group_size > self.batch_size and batch_len > 0:
-        #         count += 1
-        #         batch_len = 0
-        #     batch_len += group_size
-
-        # if batch_len > 0:
-        #     count += 1
-
-        # return count
-
         return len(self.groups)
 
 
@@ -189,7 +158,6 @@ class Metrics:
 class CustomTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.desired_scale = kwargs.pop("desired_scale", 1)
-        # self.loss = kwargs.pop("loss", "mse")
 
         losses_arg = kwargs.pop("losses", "mse")
         if isinstance(losses_arg, list):
@@ -247,36 +215,34 @@ class CustomTrainer(Trainer):
         total_loss = 0.0
         component_losses = {}
 
-        if "mse" in self.loss_fns:
-            loss_mse = self.loss_fns["mse"](predictions, labels)
-            weighted_loss = self.loss_weights["mse"] * loss_mse
-            total_loss += weighted_loss
-            component_losses["mse"] = loss_mse.item()
-
-        if "margin" in self.loss_fns:
-            labels_diff = labels.unsqueeze(0) - labels.unsqueeze(1)
-            mask = labels_diff > 0
-            if mask.any():
-                i_idx, j_idx = mask.nonzero(as_tuple=True)
-                pred_i = predictions[i_idx]
-                pred_j = predictions[j_idx]
-                target = torch.ones_like(pred_i)
-                loss_margin = self.loss_fns["margin"](pred_i, pred_j, target)
+        for key, loss_fn in self.loss_fns.items():
+            if key == "mse":
+                loss_value = loss_fn(predictions, labels)
+            elif key == "margin":
+                labels_diff = labels.unsqueeze(0) - labels.unsqueeze(1)
+                mask = labels_diff > 0
+                if mask.any():
+                    i_idx, j_idx = mask.nonzero(as_tuple=True)
+                    pred_i = predictions[i_idx]
+                    pred_j = predictions[j_idx]
+                    target = torch.ones_like(pred_i)
+                    loss_value = loss_fn(pred_i, pred_j, target)
+                else:
+                    loss_value = torch.tensor(0.0, device=predictions.device)
+            elif key == "bce":
+                loss_value = loss_fn(predictions, labels)
+            elif key in ("ranknet", "listnet", "lambdarank", "listmle"):
+                loss_value = loss_fn(predictions, labels, indexes)
             else:
-                loss_margin = torch.tensor(0.0, device=predictions.device)
-            weighted_loss = self.loss_weights["margin"] * loss_margin
-            total_loss += weighted_loss
-            component_losses["margin"] = loss_margin.item()
+                raise ValueError(f"Unknown loss function: {key}")
 
-        if "ranknet" in self.loss_fns:
-            loss_ranknet = self.loss_fns["ranknet"](predictions, labels, indexes)
-            weighted_loss = self.loss_weights["ranknet"] * loss_ranknet
+            weighted_loss = self.loss_weights[key] * loss_value
             total_loss += weighted_loss
-            component_losses["ranknet"] = loss_ranknet.item()
+            component_losses[key] = loss_value.item()
 
         if return_outputs:
             outputs.loss = total_loss
-            return (total_loss, outputs)
+            return total_loss, outputs
         return total_loss
 
 
@@ -320,7 +286,6 @@ def parse_arguments():
     parser.add_argument("--gradient-accumulation-steps", help="Gradient Accumulation Steps", type=int, default=4)
     parser.add_argument("--num-epochs", help="Number of Epochs", type=int, default=3)
     parser.add_argument("--fp16", help="Use FP16", action="store_true")
-    # parser.add_argument("--loss", help="Loss Function", type=str, default="mse", choices=['mse', 'margin', 'ranknet', 'listnet', 'lambdarank', 'listmle', 'bce'])
     parser.add_argument("--losses", help="Comma-separated list of losses", type=validate_losses, default="mse")
     parser.add_argument("--loss-weights", help="Comma-separated list of loss weights corresponding to the losses", type=validate_loss_weights, default="1.0")
     parser.add_argument("--margin", help="Margin for Ranking Loss", type=float, default=0.1)

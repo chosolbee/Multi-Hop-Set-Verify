@@ -216,7 +216,7 @@ class CustomTrainer(Trainer):
         component_losses = {}
 
         for key, loss_fn in self.loss_fns.items():
-            if key == "mse":
+            if key in ('mse', 'bce'):
                 loss_value = loss_fn(predictions, labels)
             elif key == "margin":
                 labels_diff = labels.unsqueeze(0) - labels.unsqueeze(1)
@@ -229,8 +229,6 @@ class CustomTrainer(Trainer):
                     loss_value = loss_fn(pred_i, pred_j, target)
                 else:
                     loss_value = torch.tensor(0.0, device=predictions.device)
-            elif key == "bce":
-                loss_value = loss_fn(predictions, labels)
             elif key in ("ranknet", "listnet", "lambdarank", "listmle"):
                 loss_value = loss_fn(predictions, labels, indexes)
             else:

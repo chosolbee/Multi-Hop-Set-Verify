@@ -189,26 +189,38 @@ class Metrics:
 class CustomTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.desired_scale = kwargs.pop("desired_scale", 1)
-        self.loss = kwargs.pop("loss", "mse")
+        # self.loss = kwargs.pop("loss", "mse")
+
+        losses_arg = kwargs.pop("losses", "mse")
+        if isinstance(losses_arg, list):
+            self.losses = losses_arg
+        else:
+            self.losses = [l.strip() for l in losses_arg.split(",")]
+
+        loss_weights_arg = kwargs.pop("loss_weights", "1.0")
+        self.loss_weights = {loss: weight for loss, weight in zip(self.losses, loss_weights_arg)}
+
         margin = kwargs.pop("margin", 0.1)
         sigma = kwargs.pop("sigma", 1.0)
 
-        if self.loss == "mse":
-            self.loss_fn = nn.MSELoss()
-        elif self.loss == "margin":
-            self.loss_fn = nn.MarginRankingLoss(margin=margin)
-        elif self.loss == "ranknet":
-            self.loss_fn = RankNetLoss(sigma=sigma)
-        elif self.loss == "listnet":
-            self.loss_fn = ListNetLoss()
-        elif self.loss == "lambdarank":
-            self.loss_fn = LambdaRankLoss(sigma=sigma)
-        elif self.loss == "listmle":
-            self.loss_fn = ListMLELoss()
-        elif self.loss == "bce":
-            self.loss_fn = nn.BCELoss()
-        else:
-            raise ValueError(f"Unknown loss function: {self.loss}")
+        self.loss_fns = {}
+        for loss in self.losses:
+            if loss == "mse":
+                self.loss_fns["mse"] = nn.MSELoss()
+            elif loss == "margin":
+                self.loss_fns["margin"] = nn.MarginRankingLoss(margin=margin)
+            elif loss == "ranknet":
+                self.loss_fns["ranknet"] = RankNetLoss(sigma=sigma)
+            elif loss == "listnet":
+                self.loss_fns["listnet"] = ListNetLoss()
+            elif loss == "lambdarank":
+                self.loss_fns["lambdarank"] = LambdaRankLoss(sigma=sigma)
+            elif loss == "listmle":
+                self.loss_fns["listmle"] = ListMLELoss()
+            elif loss == "bce":
+                self.loss_fns["bce"] = nn.BCELoss()
+            else:
+                raise ValueError(f"Unknown loss function: {loss}")
 
         super().__init__(*args, **kwargs)
 
@@ -232,9 +244,16 @@ class CustomTrainer(Trainer):
         labels = labels_dict["labels"]
         indexes = labels_dict["question_ids"]
 
-        if self.loss == "mse":
-            loss = self.loss_fn(predictions, labels)
-        elif self.loss == "margin":
+        total_loss = 0.0
+        component_losses = {}
+
+        if "mse" in self.loss_fns:
+            loss_mse = self.loss_fns["mse"](predictions, labels)
+            weighted_loss = self.loss_weights["mse"] * loss_mse
+            total_loss += weighted_loss
+            component_losses["mse"] = loss_mse.item()
+
+        if "margin" in self.loss_fns:
             labels_diff = labels.unsqueeze(0) - labels.unsqueeze(1)
             mask = labels_diff > 0
             if mask.any():
@@ -242,19 +261,23 @@ class CustomTrainer(Trainer):
                 pred_i = predictions[i_idx]
                 pred_j = predictions[j_idx]
                 target = torch.ones_like(pred_i)
-                loss = self.loss_fn(pred_i, pred_j, target)
+                loss_margin = self.loss_fns["margin"](pred_i, pred_j, target)
             else:
-                loss = torch.tensor(0.0, device=predictions.device)
-        elif self.loss == "bce":
-            loss = self.loss_fn(predictions, labels)
-        elif self.loss in ["ranknet", "listnet", "lambdarank", "listmle"]:
-            loss = self.loss_fn(predictions, labels, indexes)
-        else:
-            raise ValueError(f"Unknown loss function: {self.loss}")
+                loss_margin = torch.tensor(0.0, device=predictions.device)
+            weighted_loss = self.loss_weights["margin"] * loss_margin
+            total_loss += weighted_loss
+            component_losses["margin"] = loss_margin.item()
+
+        if "ranknet" in self.loss_fns:
+            loss_ranknet = self.loss_fns["ranknet"](predictions, labels, indexes)
+            weighted_loss = self.loss_weights["ranknet"] * loss_ranknet
+            total_loss += weighted_loss
+            component_losses["ranknet"] = loss_ranknet.item()
 
         if return_outputs:
-            return (loss, outputs)
-        return loss
+            outputs.loss = total_loss
+            return (total_loss, outputs)
+        return total_loss
 
 
 class PrintCallback(TrainerCallback):
@@ -264,6 +287,20 @@ class PrintCallback(TrainerCallback):
             for key, value in logs.items():
                 print(f"  {key}: {value:.4f}")
             print("-" * 40)
+
+def validate_losses(losses_str):
+    allowed_losses = {'mse', 'margin', 'ranknet', 'listnet', 'lambdarank', 'listmle', 'bce'}
+    losses = [loss.strip() for loss in losses_str.split(",")]
+    for loss in losses:
+        if loss not in allowed_losses:
+            raise argparse.ArgumentTypeError(f"Invalid loss function: {loss}. Allowed values: {allowed_losses}")
+    return losses
+
+def validate_loss_weights(weights_input):
+    if isinstance(weights_input, list):
+        return [float(w) for w in weights_input]
+    else:
+        return [float(w.strip()) for w in weights_input.split(",")]
 
 
 def parse_arguments():
@@ -283,15 +320,25 @@ def parse_arguments():
     parser.add_argument("--gradient-accumulation-steps", help="Gradient Accumulation Steps", type=int, default=4)
     parser.add_argument("--num-epochs", help="Number of Epochs", type=int, default=3)
     parser.add_argument("--fp16", help="Use FP16", action="store_true")
-    parser.add_argument("--loss", help="Loss Function", type=str, default="mse", choices=['mse', 'margin', 'ranknet', 'listnet', 'lambdarank', 'listmle', 'bce'])
+    # parser.add_argument("--loss", help="Loss Function", type=str, default="mse", choices=['mse', 'margin', 'ranknet', 'listnet', 'lambdarank', 'listmle', 'bce'])
+    parser.add_argument("--losses", help="Comma-separated list of losses", type=validate_losses, default="mse")
+    parser.add_argument("--loss-weights", help="Comma-separated list of loss weights corresponding to the losses", type=validate_loss_weights, default="1.0")
     parser.add_argument("--margin", help="Margin for Ranking Loss", type=float, default=0.1)
     parser.add_argument("--sigma", help="Sigma for RankNet or LambdaRank", type=float, default=1.0)
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if len(args.losses) != len(args.loss_weights):
+        parser.error("Number of loss weights must match number of losses")
+
+    return args
 
 
 def main():
     args = parse_arguments()
+
+    print("Selected Loss Functions and Weights:")
+    for loss, weight in zip(args.losses, args.loss_weights): print(f"  {loss}: {weight}")
 
     model_name = "microsoft/deberta-v3-large"
 
@@ -312,7 +359,8 @@ def main():
                 "gradient_accumulation_steps": args.gradient_accumulation_steps,
                 "epochs": args.num_epochs,
                 "fp16": args.fp16,
-                "loss": args.loss,
+                "losses": args.losses,       
+                "loss_weights": args.loss_weights,
                 "margin": args.margin,
                 "sigma": args.sigma,
             },
@@ -359,7 +407,8 @@ def main():
         compute_metrics=compute_metrics,
         callbacks=[print_callback],
         desired_scale=args.desired_scale,
-        loss=args.loss,
+        losses=args.losses,       
+        loss_weights=args.loss_weights,
         margin=args.margin,
         sigma=args.sigma,
     )

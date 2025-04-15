@@ -288,6 +288,7 @@ def parse_arguments():
     parser.add_argument("--loss-weights", help="Comma-separated list of loss weights corresponding to the losses", type=validate_loss_weights, default="1.0")
     parser.add_argument("--margin", help="Margin for Ranking Loss", type=float, default=0.1)
     parser.add_argument("--sigma", help="Sigma for RankNet or LambdaRank", type=float, default=1.0)
+    parser.add_argument("--run-name", help="Custom WandB run name", type=str, default=None)
 
     args = parser.parse_args()
 
@@ -308,8 +309,9 @@ def main():
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if local_rank == -1 or local_rank == 0:  # Only initialize wandb on the main process
         wandb.init(
-            project="MultiHopVerifierTraining",
+            project="verifier-train",
             entity=WANDB_ENTITY,
+            name=args.run_name,
             config={
                 "model_name": model_name,
                 "max_length": args.max_length,
@@ -349,6 +351,7 @@ def main():
         save_steps=500,
         logging_steps=100,
         report_to=["wandb"],
+        run_name=args.run_name,
         load_best_model_at_end=True,
         ddp_find_unused_parameters=False,
         fp16=args.fp16,

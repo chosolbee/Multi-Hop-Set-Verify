@@ -19,16 +19,20 @@ class LambdaRankLoss(nn.Module):
         preds = preds.squeeze(-1)
         labels = labels.squeeze(-1)
 
-        list_size = preds.size(0)
-
         preds, labels, mask = batch_gather(preds, labels, indexes)
+
+        batch_size, list_size = preds.shape
 
         _, true_ranks = torch.sort(labels, descending=True, dim=1)
         ranks = torch.argsort(torch.argsort(-preds, dim=1), dim=1).float()
 
         gain = self._dcg_gain(labels)
         discount = self._rank_discount(ranks)
-        ideal_discount = self._rank_discount(torch.arange(list_size, device=preds.device).float())
+
+        position_indices = torch.arange(list_size, device=preds.device).float()
+        ideal_discount = self._rank_discount(position_indices)
+
+        ideal_discount = ideal_discount.unsqueeze(0).expand(batch_size, -1)
 
         pred_diff = preds.unsqueeze(2) - preds.unsqueeze(1)
         true_diff = labels.unsqueeze(2) - labels.unsqueeze(1)
@@ -39,11 +43,11 @@ class LambdaRankLoss(nn.Module):
         delta_dcg = torch.abs(gain_diff * discount_diff)
 
         ideal_gain = torch.gather(gain, dim=1, index=true_ranks)
-        ideal_dcg = torch.sum(ideal_gain * ideal_discount[:list_size], dim=1, keepdim=True) + self.eps
+        ideal_dcg = torch.sum(ideal_gain * ideal_discount, dim=1, keepdim=True) + self.eps
+
         delta_ndcg = delta_dcg / ideal_dcg.unsqueeze(2)
 
-        sigmoid = torch.sigmoid(self.sigma * pred_diff)
-        lambda_ij = -self.sigma * S_ij * (1.0 - sigmoid) * delta_ndcg
+        lambda_ij = torch.log1p(torch.exp(-self.sigma * S_ij * pred_diff)) * delta_ndcg
 
         pairwise_mask = mask.unsqueeze(2) * mask.unsqueeze(1)
         diag_mask = ~torch.eye(list_size, dtype=torch.bool, device=preds.device).unsqueeze(0)
@@ -53,7 +57,7 @@ class LambdaRankLoss(nn.Module):
 
         lambda_per_doc = lambda_ij.sum(dim=-1)
 
-        return (lambda_per_doc**2).sum() / final_mask.sum()
+        return (lambda_per_doc**2).sum() / (final_mask.sum() + self.eps)
 
 
 def test():
@@ -63,7 +67,7 @@ def test():
 
     loss_fn = LambdaRankLoss()
     loss = loss_fn(preds, labels, indexes)
-    print(f"ListNet Loss: {loss.item()}")
+    print(f"LambdaRank Loss: {loss.item()}")
 
 
 if __name__ == "__main__":

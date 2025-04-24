@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument("--input-path", type=str, required=True, help="Path to the input JSONL file.")
     parser.add_argument("--eval-output-path", type=str, required=True, help="Path to save the eval set.")
     parser.add_argument("--test-output-path", type=str, required=True, help="Path to save the test set.")
-    parser.add_argument("--split-ratio", type=float, default=0.8, help="Proportion of data to use for eval (default: 0.8).")
+    parser.add_argument("--split-ratio", type=float, default=0.5, help="Proportion of data to use for eval (default: 0.5).")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for shuffling (default: 42).")
     return parser.parse_args()
 

@@ -99,16 +99,15 @@ class QueryGenerator:
         return clean_texts
 
     def extract_query(self, generated_text):
-        if re.fullmatch(r"\s*<stop>\s*", generated_text, re.IGNORECASE):
+        if re.search(r"<\s*stop\s*>", generated_text, re.IGNORECASE):
             return "<stop>"
 
         pattern = r"<query>(.*?)</query>"
-        match = re.search(pattern, generated_text, re.DOTALL)
-
+        match = re.search(pattern, generated_text, re.DOTALL | re.IGNORECASE)
         if match:
             return match.group(1).strip()
-        else:
-            return generated_text.strip()
+
+        return generated_text.strip()
 
 
 def parse_args():

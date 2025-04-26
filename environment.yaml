@@ -26,3 +26,6 @@ dependencies:
       - wandb
       - peft
       - accelerate
+      - vllm
+      - autoawq
+      - autoawq-kernels

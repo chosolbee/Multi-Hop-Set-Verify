@@ -138,8 +138,6 @@ def run_batch(retriever, query_generator, verifier, questions, max_iterations=5,
         recall_list[idx].append(recall)
         f1_list[idx].append(f1)
 
-    print_results(em_list, precision_list, recall_list, f1_list)
-
     return em_list, precision_list, recall_list, f1_list
 
 
@@ -151,7 +149,8 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument("--qg-cache-dir", type=str, help="Cache directory for query generator model")
+    query_generator_group.add_argument("--qg-tp-size", type=int, default=2, help="Tensor parallel size for query generator")
+    query_generator_group.add_argument("--qg-quantization", type=str, default="awq_marlin", help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")
     query_generator_group.add_argument("--qg-temperature", type=float, default=0.7, help="Temperature for query generator")
     query_generator_group.add_argument("--qg-top-p", type=float, default=0.9, help="Top-p sampling for query generator")
@@ -187,8 +186,9 @@ def main(args: argparse.Namespace):
     )
 
     query_generator = QueryGenerator(
-        model_id="meta-llama/Meta-Llama-3-8B-Instruct",
-        cache_dir=args.qg_cache_dir,
+        model_id="casperhansen/llama-3.3-70b-instruct-awq",
+        tp_size=args.qg_tp_size,
+        quantization=args.qg_quantization,
         max_gen_length=args.qg_max_gen_length,
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
@@ -201,7 +201,7 @@ def main(args: argparse.Namespace):
         max_length=args.verifier_max_length,
     )
 
-    with open(args.questions, "r") as f:
+    with open(args.questions, "r", encoding="utf-8") as f:
         questions = f.readlines()
         questions = [json.loads(q) for q in questions]
 
@@ -228,6 +228,7 @@ def main(args: argparse.Namespace):
             precision_list[j].extend(precision[j])
             recall_list[j].extend(recall[j])
             f1_list[j].extend(f1[j])
+        print_results(em_list, precision_list, recall_list, f1_list)
 
     print("Final Results:")
     print_results(em_list, precision_list, recall_list, f1_list)

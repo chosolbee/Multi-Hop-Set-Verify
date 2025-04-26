@@ -157,7 +157,7 @@ def parse_args():
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
     main_group.add_argument("--stop-log-path", type=str, default=None,
-                            help="Optional path to JSONL file for stop logs; if omitted, stop logs are not saved")
+                            help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
     return parser.parse_args()
 

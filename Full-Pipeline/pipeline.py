@@ -97,15 +97,46 @@ def run_batch(retriever, query_generator, verifier, questions, max_iterations=5,
     recall_list = [[], [], []]
     f1_list = [[], [], []]
 
+    # for question, history in zip(final_questions, final_batch_history):
+    #     question_id = question["id"]
+    #     correct = sum(int(question_id in doc["id"]) for doc in history)
+    #     num_hops = int(question_id[0])  # len(question["question_decomposition"])
+    #     num_retrieval = len(history)
+    #     em_list[num_hops - 2].append(int(correct == num_hops and num_hops == num_retrieval))
+    #     precision_list[num_hops - 2].append(correct / num_retrieval)
+    #     recall_list[num_hops - 2].append(correct / num_hops)
+    #     f1_list[num_hops - 2].append(2 * correct / (num_hops + num_retrieval))
+
     for question, history in zip(final_questions, final_batch_history):
-        question_id = question["question_id"]
-        correct = sum(int(question_id in doc["id"]) for doc in history)
-        num_hops = int(question_id[0])  # len(question["question_decomposition"])
-        num_retrieval = len(history)
-        em_list[num_hops - 2].append(int(correct == num_hops and num_hops == num_retrieval))
-        precision_list[num_hops - 2].append(correct / num_retrieval)
-        recall_list[num_hops - 2].append(correct / num_hops)
-        f1_list[num_hops - 2].append(2 * correct / (num_hops + num_retrieval))
+        qid = question["id"]
+        decomposition = question.get("question_decomposition", [])
+        gold_idxs = [step["paragraph_support_idx"] for step in decomposition]
+        gold_chunk_ids = {f"{qid}-{idx:02d}" for idx in gold_idxs}
+        gold_hop = len(gold_chunk_ids)
+
+        correct = 0
+        for doc in history:
+            doc_chunks = set(doc["id"].split("//"))
+            if gold_chunk_ids & doc_chunks:
+                correct += 1
+
+        retrieved = len(history)
+        em = int(correct == gold_hop and retrieved == gold_hop)
+        precision = correct / retrieved if retrieved else 0.0
+        recall = correct / gold_hop   if gold_hop   else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+
+        ### FOR DEBUGGING ###
+        history_ids = [d["id"] for d in history]
+        print(f"[DEBUG] qid={qid}, gold_hop={gold_hop}, history_ids={history_ids}, "
+            f"correct={correct}, retrieved={retrieved}, em={em:.3f}, recall={recall:.3f}, precision={precision:.3f}")
+        #####################
+
+        idx = gold_hop - 2
+        em_list[idx].append(em)
+        precision_list[idx].append(precision)
+        recall_list[idx].append(recall)
+        f1_list[idx].append(f1)
 
     print_results(em_list, precision_list, recall_list, f1_list)
 

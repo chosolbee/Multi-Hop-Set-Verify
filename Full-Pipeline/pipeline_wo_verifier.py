@@ -5,7 +5,7 @@ import argparse
 import wandb
 from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
 from .contriever import Retriever
-from .query_generator import QueryGenerator
+from .query_generator.query_generator_wo_verifier import QueryGenerator
 
 def print_results(em_list, precision_list, recall_list, f1_list):
     em_flat = [item for sublist in em_list for item in sublist]
@@ -217,6 +217,7 @@ def main(args: argparse.Namespace):
     print("Final Results:")
     print_results(em_list, precision_list, recall_list, f1_list)
     print("All done!")
+    
     wandb.finish()
 
 

@@ -126,6 +126,12 @@ def run_batch(retriever, query_generator, verifier, questions, max_iterations=5,
         recall = correct / gold_hop   if gold_hop   else 0.0
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
 
+        ### FOR DEBUGGING ###
+        history_ids = [d["id"] for d in history]
+        print(f"[DEBUG] qid={qid}, gold_hop={gold_hop}, history_ids={history_ids}, "
+            f"correct={correct}, retrieved={retrieved}, em={em:.3f}, recall={recall:.3f}, precision={precision:.3f}")
+        #####################
+
         idx = gold_hop - 2
         em_list[idx].append(em)
         precision_list[idx].append(precision)
@@ -233,4 +239,3 @@ def main(args: argparse.Namespace):
 if __name__ == "__main__":
     args = parse_args()
     main(args)
-    

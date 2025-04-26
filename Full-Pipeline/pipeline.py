@@ -149,13 +149,15 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument("--qg-tp-size", type=int, default=2, help="Tensor parallel size for query generator")
-    query_generator_group.add_argument("--qg-quantization", type=str, default="awq_marlin", help="Quantization method for query generator")
+    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator")
+    query_generator_group.add_argument("--qg-tp-size", type=int, default=1, help="Tensor parallel size for query generator")
+    query_generator_group.add_argument("--qg-quantization", type=str, help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")
     query_generator_group.add_argument("--qg-temperature", type=float, default=0.7, help="Temperature for query generator")
     query_generator_group.add_argument("--qg-top-p", type=float, default=0.9, help="Top-p sampling for query generator")
 
     verifier_group = parser.add_argument_group("Verifier Options")
+    verifier_group.add_argument("--verifier-model-id", type=str, default="microsoft/DeBERTa-v3-large", help="Model ID for verifier")
     verifier_group.add_argument("--verifier-checkpoint-path", type=str, required=True, help="Checkpoint path for trained model")
     verifier_group.add_argument("--verifier-batch-size", type=int, default=8, help="Batch size for verifier")
     verifier_group.add_argument("--verifier-max-length", type=int, default=DEBERTA_MAX_LENGTH, help="Maximum length for verifier input")
@@ -186,7 +188,7 @@ def main(args: argparse.Namespace):
     )
 
     query_generator = QueryGenerator(
-        model_id="casperhansen/llama-3.3-70b-instruct-awq",
+        model_id=args.qg_model_id,
         tp_size=args.qg_tp_size,
         quantization=args.qg_quantization,
         max_gen_length=args.qg_max_gen_length,
@@ -195,7 +197,7 @@ def main(args: argparse.Namespace):
     )
 
     verifier = Verifier(
-        model_id="microsoft/DeBERTa-v3-large",
+        model_id=args.verifier_model_id,
         checkpoint_path=args.verifier_checkpoint_path,
         batch_size=args.verifier_batch_size,
         max_length=args.verifier_max_length,

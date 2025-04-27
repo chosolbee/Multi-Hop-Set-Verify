@@ -73,13 +73,7 @@ def run_batch(retriever, query_generator, verifier, questions,
 
                 stop_logs.append({
                     "question_id": question["id"],
-                    "gold_hop": len({
-                        f"{question['id']}-{idx:02d}"
-                        for idx in [
-                            step["paragraph_support_idx"]
-                            for step in question.get("question_decomposition", [])
-                        ]
-                    }),
+                    "gold_hop": len(question.get("question_decomposition", [])),
                     "stop_iter": iter_count + 1
                 })
             else:
@@ -99,13 +93,7 @@ def run_batch(retriever, query_generator, verifier, questions,
                 final_batch_history.append(history)
                 stop_logs.append({
                     "question_id": question["id"],
-                    "gold_hop": len({
-                        f"{question['id']}-{idx:02d}"
-                        for idx in [
-                            step["paragraph_support_idx"]
-                            for step in question.get("question_decomposition", [])
-                        ]
-                    }),
+                    "gold_hop": len(question.get("question_decomposition", [])),
                     "stop_iter": iter_count
                 })
             break
@@ -164,7 +152,6 @@ def run_batch(retriever, query_generator, verifier, questions,
                 f.write(json.dumps(log,ensure_ascii=False)+'\n')
                 
     print_results(em_list, precision_list, recall_list, f1_list)
-    
     return em_list, precision_list, recall_list, f1_list
 
 
@@ -213,7 +200,6 @@ def main(args: argparse.Namespace):
         model_type="contriever",
         model_path="facebook/contriever-msmarco",
     )
-
     query_generator = QueryGenerator(
         model_id="meta-llama/Meta-Llama-3-8B-Instruct",
         cache_dir=args.qg_cache_dir,
@@ -221,7 +207,6 @@ def main(args: argparse.Namespace):
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
     )
-
     verifier = Verifier(
         model_id="microsoft/DeBERTa-v3-large",
         checkpoint_path=args.verifier_checkpoint_path,
@@ -263,7 +248,6 @@ def main(args: argparse.Namespace):
     print("Final Results:")
     print_results(em_list, precision_list, recall_list, f1_list)
     print("All done!")
-
     wandb.finish()
 
 

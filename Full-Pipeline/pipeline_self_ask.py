@@ -57,6 +57,13 @@ def run_batch(retriever, query_generator, verifier, questions,
             else:
                 final_questions.append(question)
                 final_batch_history.append(history)
+
+                stop_logs.append({
+                    "question_id": question["id"],
+                    "gold_hop": len(question.get("question_decomposition", [])),
+                    "stop_iter": iter_count + 1
+                })
+
                 if log_trace:
                     print(f"1. Question: {question['question']}")
                     print("2. Trace:")
@@ -89,7 +96,7 @@ def run_batch(retriever, query_generator, verifier, questions,
                 print("4. Retrieved passages and scores:")
                 for doc, score in zip(docs, scores):
                     print(f"  Score: {score:.2f} | Passage: {doc['text']}")
-                if max_score >= verifier_threshold:
+                if max_score > verifier_threshold:
                     print("** Finished processing question. (Verifier) **")
                 print()
 
@@ -142,12 +149,9 @@ def run_batch(retriever, query_generator, verifier, questions,
 
     for question, history in zip(final_questions, final_batch_history):
         qid = question["id"]
-        decomposition = question.get("question_decomposition", [])
-        gold_idxs = [step["paragraph_support_idx"] for step in decomposition]
-        gold_chunk_ids = {f"{qid}-{idx:02d}" for idx in gold_idxs}
-        gold_hop = len(gold_chunk_ids)
+        gold_hop = len(question.get("question_decomposition", []))
 
-        correct = sum(1 for doc in history if gold_chunk_ids & set(doc["id"].split("//")))
+        correct = sum(int(qid + "-sf" in doc["id"]) for doc in history)
         retrieved = len(history)
         em = int(correct == gold_hop and retrieved == gold_hop)
         precision = correct / retrieved if retrieved else 0.0
@@ -181,9 +185,7 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument(
-        "--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator"
-    )
+    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator")
     query_generator_group.add_argument("--qg-tp-size", type=int, default=1, help="Tensor parallel size for query generator")
     query_generator_group.add_argument("--qg-quantization", type=str, help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")

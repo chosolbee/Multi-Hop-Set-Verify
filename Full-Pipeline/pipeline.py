@@ -114,12 +114,9 @@ def run_batch(retriever, query_generator, verifier, questions,
 
     for question, history in zip(final_questions, final_batch_history):
         qid = question["id"]
-        decomposition = question.get("question_decomposition", [])
-        gold_idxs = [step["paragraph_support_idx"] for step in decomposition]
-        gold_chunk_ids = {f"{qid}-{idx:02d}" for idx in gold_idxs}
-        gold_hop = len(gold_chunk_ids)
+        gold_hop = len(question.get("question_decomposition", []))
 
-        correct = sum(1 for doc in history if gold_chunk_ids & set(doc["id"].split("//")))
+        correct = sum(int(qid + "-sf" in doc["id"]) for doc in history)
         retrieved = len(history)
         em = int(correct == gold_hop and retrieved == gold_hop)
         precision = correct / retrieved if retrieved else 0.0

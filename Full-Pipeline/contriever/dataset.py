@@ -197,9 +197,18 @@ class MuSiQueDataset(MultiHopDataset):
             data = [json.loads(line) for line in lines]
         return data
 
+    def process(self, sample: dict[str, Any]) -> dict[str, Any]:
+        processed_sample = super().process(sample)
+        processed_sample["is_supports"] = self.get_is_supports(sample)
+        return processed_sample
+
+    def get_is_supports(self, sample: dict) -> list[bool]:
+        is_supports = [paragraph["is_supporting"] for paragraph in sample["paragraphs"]]
+        return is_supports
+
     def get_supporting_facts(self, sample: dict) -> list[ChunkInfo]:
         chunks = self.get_chunks(sample)
-        is_supports = [paragraph["is_supporting"] for paragraph in sample["paragraphs"]]
+        is_supports = self.get_is_supports(sample)
         supporting_facts = []
         for is_support, chunk in zip(is_supports, chunks):
             if is_support:

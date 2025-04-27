@@ -54,7 +54,7 @@ def run_batch(retriever, query_generator, verifier, questions,
                 print("4. Retrieved passages and scores:")
                 for doc, score in zip(docs, scores):
                     print(f"  Score: {score:.2f} | Passage: {doc['text']}")
-                print("\n")
+                print()
 
         next_questions = []
         next_batch_history = []
@@ -83,7 +83,7 @@ def run_batch(retriever, query_generator, verifier, questions,
         questions = next_questions
         batch_history = next_batch_history
 
-        print("Iteration", iter_count + 1, "completed in", time.time() - start_time, "seconds")
+        print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
         print(f"Remaining questions: {len(questions)}\n")
 
         iter_count += 1
@@ -132,15 +132,10 @@ def run_batch(retriever, query_generator, verifier, questions,
 
         for log in stop_logs:
             if log["question_id"] == qid:
-                log.update({
-                    "em": em,
-                    "precision": precision,
-                    "recall": recall,
-                    "f1": f1
-                })
+                log.update({"em": em, "precision": precision, "recall": recall, "f1": f1})
                 break
 
-        idx = gold_hop - 2
+        idx = max(gold_hop - 2, 0)
         em_list[idx].append(em)
         precision_list[idx].append(precision)
         recall_list[idx].append(recall)
@@ -150,7 +145,7 @@ def run_batch(retriever, query_generator, verifier, questions,
         with open(stop_log_path,'a',encoding='utf-8') as f:
             for log in stop_logs:
                 f.write(json.dumps(log,ensure_ascii=False)+'\n')
-                
+
     print_results(em_list, precision_list, recall_list, f1_list)
     return em_list, precision_list, recall_list, f1_list
 
@@ -180,8 +175,7 @@ def parse_args():
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--verifier-threshold", type=float, default=0.9, help="Threshold for verifier scores")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
-    main_group.add_argument("--stop-log-path", type=str, default=None,
-                            help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
+    main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
     args = parser.parse_args()
     return args
@@ -189,7 +183,7 @@ def parse_args():
 
 def main(args: argparse.Namespace):
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    if local_rank == -1 or local_rank == 0:
+    if local_rank in [-1, 0]:
         wandb.init(project="MultiHopQA-test", entity=WANDB_ENTITY)
     else:
         os.environ["WANDB_MODE"] = "disabled"
@@ -200,6 +194,7 @@ def main(args: argparse.Namespace):
         model_type="contriever",
         model_path="facebook/contriever-msmarco",
     )
+
     query_generator = QueryGenerator(
         model_id="meta-llama/Meta-Llama-3-8B-Instruct",
         cache_dir=args.qg_cache_dir,
@@ -207,6 +202,7 @@ def main(args: argparse.Namespace):
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
     )
+
     verifier = Verifier(
         model_id="microsoft/DeBERTa-v3-large",
         checkpoint_path=args.verifier_checkpoint_path,
@@ -215,9 +211,9 @@ def main(args: argparse.Namespace):
     )
 
     if args.stop_log_path:
-        open(args.stop_log_path,'w').close()
+        open(args.stop_log_path,"w", encoding="utf-8").close()
 
-    with open(args.questions, "r") as f:
+    with open(args.questions, "r", encoding="utf-8") as f:
         questions = [json.loads(line) for line in f]
 
     em_list = [[], [], []]
@@ -228,6 +224,7 @@ def main(args: argparse.Namespace):
     for i in range(0, len(questions), args.batch_size):
         batch_questions = questions[i: i + args.batch_size]
         print(f"Processing batch {i // args.batch_size + 1} of {len(questions) // args.batch_size + 1}...\n")
+
         em, precision, recall, f1 = run_batch(
             retriever=retriever,
             query_generator=query_generator,
@@ -248,6 +245,7 @@ def main(args: argparse.Namespace):
     print("Final Results:")
     print_results(em_list, precision_list, recall_list, f1_list)
     print("All done!")
+
     wandb.finish()
 
 

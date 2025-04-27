@@ -3,7 +3,7 @@ import time
 import json
 import argparse
 import wandb
-from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
+from config import WANDB_ENTITY
 from .contriever import Retriever
 from .query_generator.query_generator_wo_verifier import QueryGenerator
 
@@ -30,42 +30,40 @@ def run_batch(retriever, query_generator, questions,
               stop_log_path=None):
     final_questions = []
     final_batch_history = []
-    stop_logs = []
-
-    active_questions = list(questions)
-    active_batch_history = [[] for _ in active_questions]
+    batch_history = [[] for _ in questions]
     iter_count = 0
 
-    while active_questions:
+    stop_logs = []
+
+    while questions:
         start_time = time.time()
-        queries = query_generator.batch_generate(active_questions, active_batch_history)
+
+        queries = query_generator.batch_generate(questions, batch_history)
         batch_docs = retriever.search(queries, max_search)
 
         if log_trace:
-            for question, query, history, docs in zip(active_questions, queries, active_batch_history, batch_docs):
-                print(f"Question: {question['question']}")
-                print(f"Generated query: {query}")
-                print("History Passages:")
+            for question, query, history, docs in zip(questions, queries, batch_history, batch_docs):
+                print(f"1. Question: {question['question']}")
+                print("2. History:")
                 for doc in history:
                     print(f"  Passage: {doc['text']}")
-                print("Retrieved Passages:")
+                print(f"3. Generated query: {query}")
+                print("4. Retrieved Passages:")
                 for doc in docs:
                     print(f"  Passage: {doc['text']}")
                 print()
 
         next_questions = []
-        next_history = []
+        next_batch_history = []
 
-        for q, history, query, docs in zip(active_questions, active_batch_history, queries, batch_docs):
+        for question, history, query, docs in zip(questions, batch_history, queries, batch_docs):
             if query.strip().lower() == "<stop>":
-                final_questions.append(q)
+                final_questions.append(question)
                 final_batch_history.append(history)
-                decomposition = q.get("question_decomposition", [])
-                gold_idxs = [step.get("paragraph_support_idx") for step in decomposition]
-                gold_chunk_ids = {f"{q['id']}-{idx:02d}" for idx in gold_idxs if idx is not None}
+
                 stop_logs.append({
-                    "question_id": q["id"],
-                    "gold_hop": len(gold_chunk_ids),
+                    "question_id": question["id"],
+                    "gold_hop": len(question.get("question_decomposition", [])),
                     "stop_iter": iter_count + 1
                 })
             else:
@@ -74,26 +72,23 @@ def run_batch(retriever, query_generator, questions,
                     if cand["id"] not in existing_ids:
                         history.append(cand)
                         break
-                next_questions.append(q)
-                next_history.append(history)
+                next_questions.append(question)
+                next_batch_history.append(history)
 
-        active_questions = next_questions
-        active_batch_history = next_history
+        questions = next_questions
+        batch_history = next_batch_history
 
         print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
-        print(f"Remaining active questions: {len(active_questions)}\n")
+        print(f"Remaining questions: {len(questions)}\n")
 
         iter_count += 1
         if iter_count >= max_iterations:
-            for q, history in zip(active_questions, active_batch_history):
-                final_questions.append(q)
+            for question, history in zip(questions, batch_history):
+                final_questions.append(question)
                 final_batch_history.append(history)
-                decomposition = q.get("question_decomposition", [])
-                gold_idxs = [step.get("paragraph_support_idx") for step in decomposition]
-                gold_chunk_ids = {f"{q['id']}-{idx:02d}" for idx in gold_idxs if idx is not None}
                 stop_logs.append({
-                    "question_id": q["id"],
-                    "gold_hop": len(gold_chunk_ids),
+                    "question_id": question["id"],
+                    "gold_hop": len(question.get("question_decomposition", [])),
                     "stop_iter": iter_count
                 })
             break
@@ -103,14 +98,14 @@ def run_batch(retriever, query_generator, questions,
     recall_list = [[], [], []]
     f1_list = [[], [], []]
 
-    for q, history in zip(final_questions, final_batch_history):
-        qid = q["id"]
-        decomposition = q.get("question_decomposition", [])
+    for question, history in zip(final_questions, final_batch_history):
+        qid = question["id"]
+        decomposition = question.get("question_decomposition", [])
         gold_idxs = [step.get("paragraph_support_idx") for step in decomposition]
         gold_chunk_ids = {f"{qid}-{idx:02d}" for idx in gold_idxs if idx is not None}
         gold_hop = len(gold_chunk_ids)
 
-        correct = sum(1 for d in history if gold_chunk_ids & set(d["id"].split("//")))
+        correct = sum(1 for doc in history if gold_chunk_ids & set(doc["id"].split("//")))
         retrieved = len(history)
         em = int(correct == gold_hop and retrieved == gold_hop)
         precision = correct / retrieved if retrieved else 0.0
@@ -129,9 +124,9 @@ def run_batch(retriever, query_generator, questions,
         f1_list[idx].append(f1)
 
     if stop_log_path:
-        with open(stop_log_path, "a", encoding="utf-8") as fout:
+        with open(stop_log_path, "a", encoding="utf-8") as f:
             for log in stop_logs:
-                fout.write(json.dumps(log, ensure_ascii=False) + "\n")
+                f.write(json.dumps(log, ensure_ascii=False) + "\n")
 
     print_results(em_list, precision_list, recall_list, f1_list)
     return em_list, precision_list, recall_list, f1_list
@@ -156,8 +151,7 @@ def parse_args():
     main_group.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
-    main_group.add_argument("--stop-log-path", type=str, default=None,
-                            help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
+    main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
     return parser.parse_args()
 
@@ -217,7 +211,7 @@ def main(args: argparse.Namespace):
     print("Final Results:")
     print_results(em_list, precision_list, recall_list, f1_list)
     print("All done!")
-    
+
     wandb.finish()
 
 

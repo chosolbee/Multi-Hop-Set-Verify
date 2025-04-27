@@ -40,7 +40,61 @@ Confirmed Passage 1: The Battle of Rich Mountain took place on July 11, 1861, in
 Confirmed Passage 2: Owing to its role in the state's history, the county motto is \"Where Illinois Began.\" It contains the historically important village of Kaskaskia, Illinois's first capital.
 Confirmed Passage 3: WIZE (1340 AM) — branded WIZE AM 1340 — is a commercial radio station in Springfield, Ohio owned by iHeartMedia, Inc. as part of their Dayton cluster. The station's main format is classic country targeted towards Springfield, and their transmitter - and former studios - are also located in Springfield.
 Your Response: From the given passages, I can see that the Battle of Rich Mountain occurred in Randolph County, Virginia (now West Virginia), and that Kaskaskia was Illinois's first capital. To answer the question, I need to know when Springfield became the capital of Illinois. Therefore, my retrieval query would be: <query>When did Springfield become the capital of Illinois?</query>
-<|eot_id|><|start_header_id|>user<|end_header_id|>
+<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+Question: 
+"""
+
+COT_WO_VERIFIER_PROMPT = """
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are tasked with generating targeted retrieval queries for multi-hop questions. A multi-hop question requires multiple pieces of information to be answered fully.
+
+Given:
+- A multi-hop question
+- A set of confirmed, relevant passages (which may be empty)
+
+Your task:
+Generate a single retrieval query that targets ONE specific missing or complementary piece of evidence needed to answer the original question that is not covered by the provided passages.
+
+Guidelines:
+1. First, perform an internal chain-of-thought (CoT) analysis to determine whether the confirmed passages fully answer the question or if additional information is needed. (Do not include your CoT in the final output.)
+2. If the confirmed passages already fully answer the question, your final response should include your internal reasoning and then end with <stop>.
+3. If additional information is necessary, your final response should include your internal reasoning and then append a retrieval query enclosed in <query> and </query> tags.
+4. Use only the information provided in the confirmed passages; do not rely on any external or prior knowledge.
+
+[Information Sufficiency Checklist]
+- Do the confirmed passages contain all critical details (names, dates, events, locations, etc.) required to answer the question?
+- If all required details are present, your final response should end with <stop>.
+
+Few-Shot Examples:
+
+Example 1:
+Question: What is the capital of France?
+Your Response: The question asks for the capital of France, and the confirmed passage clearly states that the capital is Paris. All required details are provided. <stop>
+
+Example 2:
+Question: What's the meaning of the name of the school that does not include the Mahayava scriptures in its canon?
+Your Response: The question asks for the meaning of the school's name, but the confirmed passage does not provide the actual name of the school. I need the name to determine its meaning. <query>What is the name of the school that does not include the Mahayava scriptures in its canon?</query>
+
+Example 3:
+Question: Who was picked in the NBA draft before the player with the highest point average among active players?
+Confirmed Passage 1: "Wilt Chamberlain holds the all-time records for total points scored (4,029) and points per game (50.4) in a season; he also holds the rookie record when he averaged 37.6 points in the 1959–60 season. Among active players, Kevin Durant has the highest point average (32.0) in a season, achieved in the 2013–14 season."
+Your Response: The question seeks to know who was picked in the NBA draft before the player with the highest point average among active players. The confirmed passage shows that Kevin Durant is that player but does not specify who was drafted before him. <query>Who was picked in the NBA draft before Kevin Durant?</query>
+
+Example 4:
+Question: When did the city that WIZE is licensed to broadcast to become the capital of the state that contains the county where the Battle of Rich Mountain occurred?
+Confirmed Passage 1: "The Battle of Rich Mountain took place on July 11, 1861, in Randolph County, Virginia (now West Virginia) during the American Civil War."
+Confirmed Passage 2: "Kaskaskia, located in that county, was Illinois's first capital."
+Confirmed Passage 3: "WIZE (1340 AM) is a radio station based in Springfield, Ohio."
+Your Response: The confirmed passages provide historical context and indicate that Kaskaskia was Illinois's first capital, but they do not specify when Springfield became the capital of Illinois. <query>When did Springfield become the capital of Illinois?</query>
+
+Example 5 (2-Hop with Two Confirmed Passages – <stop> Output):
+Question: What river flows through Paris, and which iconic monument on its banks was completed in 1889?
+Confirmed Passage 1: "The Seine River flows through the heart of Paris."
+Confirmed Passage 2: "The Eiffel Tower, an iconic monument along the Seine, was completed in 1889."
+Your Response: The question asks for the river flowing through Paris and the iconic monument completed in 1889 on its banks. The confirmed passages provide both details: the Seine River and the Eiffel Tower. All required information is present. <stop>
+<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
 Question: 
 """
 
@@ -88,5 +142,6 @@ Follow up: When did hurricane sandy hit New York City?
 Context: Effects of Hurricane Sandy in New York: Hurricane Sandy Category 1 hurricane (SSHWS / NWS) Satellite image of Sandy at 4: 15 p.m. EDT on October 29 as it was about to make landfall on the Jersey Shore Formed October 28, 2012 (First rainbands begin to affect New Jersey) Dissipated November 2, 2012 (Dissipated as extratropical cyclone) (Extratropical after October 29) Highest winds 1 - minute sustained: 80 mph (130 km / h) Highest gust Gusts: 100 mph (155 km / h) Lowest pressure 945 mbar (hPa); 27.91 inHg Fatalities 53 total Damage $32 billion (2012 USD) (Estimated damage total) Areas affected New York, especially the New York metropolitan area Part of the 2012 Atlantic hurricane season Part of a series on Hurricane Sandy General Meteorological history Impact Greater Antilles United States Maryland and Washington, D.C. New Jersey New York New England Canada Other wikis Commons: Sandy images Wikinews: Sandy stories
 Intermediate answer: Hurricane sandy hit New York City in October 28, 2012.
 So the final answer is: October 28, 2012
-<|eot_id|><|start_header_id|>user<|end_header_id|>
+<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
 """

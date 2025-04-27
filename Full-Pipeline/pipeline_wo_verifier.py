@@ -53,8 +53,8 @@ def run_batch(retriever, query_generator, questions,
                     print(f"  Passage: {doc['text']}")
                 print()
 
-        next_questions = []
-        next_batch_history = []
+        questions = []
+        batch_history = []
 
         for question, history, query, docs in zip(questions, batch_history, queries, batch_docs):
             if query.strip().lower() == "<stop>":
@@ -72,11 +72,8 @@ def run_batch(retriever, query_generator, questions,
                     if cand["id"] not in existing_ids:
                         history.append(cand)
                         break
-                next_questions.append(question)
-                next_batch_history.append(history)
-
-        questions = next_questions
-        batch_history = next_batch_history
+                questions.append(question)
+                batch_history.append(history)
 
         print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
         print(f"Remaining questions: {len(questions)}\n")
@@ -151,7 +148,7 @@ def parse_args():
     main_group.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
-    main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
+    main_group.add_argument("--stop-log-path", type=str, default=None, help="Path to the JSONL file where stop logs are written (Optional)")
 
     return parser.parse_args()
 
@@ -200,7 +197,7 @@ def main(args: argparse.Namespace):
             max_iterations=args.max_iterations,
             max_search=args.max_search,
             log_trace=args.log_trace,
-            stop_log_path=args.stop_log_path
+            stop_log_path=args.stop_log_path,
         )
         for j in range(3):
             em_list[j].extend(em[j])

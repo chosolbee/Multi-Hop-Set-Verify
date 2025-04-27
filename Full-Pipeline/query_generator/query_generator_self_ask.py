@@ -46,12 +46,8 @@ class QueryGenerator:
         for trace, output in zip(traces, outputs):
             new_trace, query = self.extract_query(output.outputs[0].text)
             trace += new_trace
-            if query:
-                new_traces.append(trace)
-                queries.append(query)
-            else:
-                new_traces.append(trace)
-                queries.append("")
+            new_traces.append(trace)
+            queries.append(query)
 
         return new_traces, queries
 

@@ -57,6 +57,13 @@ def run_batch(retriever, query_generator, verifier, questions,
             else:
                 final_questions.append(question)
                 final_batch_history.append(history)
+
+                stop_logs.append({
+                    "question_id": question["id"],
+                    "gold_hop": len(question.get("question_decomposition", [])),
+                    "stop_iter": iter_count + 1
+                })
+
                 if log_trace:
                     print(f"1. Question: {question['question']}")
                     print("2. Trace:")
@@ -89,7 +96,7 @@ def run_batch(retriever, query_generator, verifier, questions,
                 print("4. Retrieved passages and scores:")
                 for doc, score in zip(docs, scores):
                     print(f"  Score: {score:.2f} | Passage: {doc['text']}")
-                if max_score >= verifier_threshold:
+                if max_score > verifier_threshold:
                     print("** Finished processing question. (Verifier) **")
                 print()
 

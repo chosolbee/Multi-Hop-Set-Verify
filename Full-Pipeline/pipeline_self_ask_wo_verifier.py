@@ -56,6 +56,13 @@ def run_batch(retriever, query_generator, questions,
             else:
                 final_questions.append(question)
                 final_batch_history.append(history)
+
+                stop_logs.append({
+                    "question_id": question["id"],
+                    "gold_hop": len(question.get("question_decomposition", [])),
+                    "stop_iter": iter_count
+                })
+
                 if log_trace:
                     print(f"1. Question: {question['question']}")
                     print("2. Trace:")

@@ -10,8 +10,12 @@ from dataset import MultiHopDataset, get_dataset
 def parse_chunks(dataset: MultiHopDataset):
     for sample in dataset:
         id = sample["id"]
+        is_supports = sample["is_supports"]
         for idx, chunk in enumerate(sample["chunks"]):
-            cid = f"{id}-{idx:02d}"
+            if is_supports[idx]:
+                cid = f"{id}-sf-{idx:02d}"
+            else:
+                cid = f"{id}-{idx:02d}"
             yield {"id": cid, "text": chunk}
 
 

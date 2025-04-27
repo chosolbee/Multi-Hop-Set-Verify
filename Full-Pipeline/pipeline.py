@@ -24,7 +24,7 @@ def print_results(em_list, precision_list, recall_list, f1_list):
     print("Total Recall", sum(recall_flat) / len(recall_flat) if recall_flat else 0)
     print("F1:", [sum(f1) / len(f1) if f1 else 0 for f1 in f1_list])
     print("Total F1", sum(f1_flat) / len(f1_flat) if f1_flat else 0)
-    print("\n")
+    print()
 
 
 def run_batch(retriever, query_generator, verifier, questions,
@@ -105,7 +105,7 @@ def run_batch(retriever, query_generator, verifier, questions,
             print("2. History:")
             for doc in history:
                 print(f"  Passage: {doc['text']}")
-            print("\n")
+            print()
 
     em_list = [[], [], []]
     precision_list = [[], [], []]

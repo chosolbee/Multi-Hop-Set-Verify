@@ -3,10 +3,9 @@ import time
 import json
 import argparse
 import wandb
-from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
+from config import WANDB_ENTITY
 from .contriever import Retriever
 from .query_generator.query_generator_self_ask import QueryGenerator
-from .verifier import Verifier
 
 
 def print_results(em_list, precision_list, recall_list, f1_list):
@@ -24,12 +23,12 @@ def print_results(em_list, precision_list, recall_list, f1_list):
     print("Total Recall", sum(recall_flat) / len(recall_flat) if recall_flat else 0)
     print("F1:", [sum(f1) / len(f1) if f1 else 0 for f1 in f1_list])
     print("Total F1", sum(f1_flat) / len(f1_flat) if f1_flat else 0)
-    print()
+    print("")
 
 
-def run_batch(retriever, query_generator, verifier, questions,
-              max_iterations=5, max_search=10, verifier_threshold=0.9,
-              log_trace=False, stop_log_path=None):
+def run_batch(retriever, query_generator, questions,
+              max_iterations=5, max_search=10, log_trace=False,
+              stop_log_path=None):
     final_questions = []
     final_batch_history = []
     batch_history = [[] for _ in range(len(questions))]
@@ -61,51 +60,37 @@ def run_batch(retriever, query_generator, verifier, questions,
                     print(f"1. Question: {question['question']}")
                     print("2. Trace:")
                     print(trace.strip())
-                    print("** Finished processing question. (QG) **")
+                    print("** Finished processing question. **")
                     print()
 
         batch_docs = retriever.search(search_queries, max_search)
-        batch_scores = verifier.batch_verify(search_questions, search_batch_history, batch_docs)
 
         next_questions = []
         next_batch_history = []
         next_traces = []
 
-        for question, history, trace, query, docs, scores in zip(
-            search_questions, search_batch_history, search_traces, search_queries, batch_docs, batch_scores
+        for question, history, trace, query, docs in zip(
+            search_questions, search_batch_history, search_traces, search_queries, batch_docs
         ):
-            for i, doc in enumerate(docs):
-                if doc["id"] in {d["id"] for d in history}:
-                    scores[i] = -1
-            max_score = scores.max()
-            selected_doc = docs[scores.argmax()]
-            history.append(selected_doc)
+            for doc in docs:
+                if doc["id"] not in {d["id"] for d in history}:
+                    selected_doc = doc
+                    history.append(selected_doc)
+                    break
 
             if log_trace:
                 print(f"1. Question: {question['question']}")
                 print("2. Trace:")
                 print(trace.strip())
                 print(f"3. Generated query: {query}")
-                print("4. Retrieved passages and scores:")
-                for doc, score in zip(docs, scores):
-                    print(f"  Score: {score:.2f} | Passage: {doc['text']}")
-                if max_score >= verifier_threshold:
-                    print("** Finished processing question. (Verifier) **")
+                print("4. Retrieved passages:")
+                for doc in docs:
+                    print(f"  Passage: {doc['text']}")
                 print()
 
-            if max_score > verifier_threshold:
-                final_questions.append(question)
-                final_batch_history.append(history)
-
-                stop_logs.append({
-                    "question_id": question["id"],
-                    "gold_hop": len(question.get("question_decomposition", [])),
-                    "stop_iter": iter_count + 1
-                })
-            else:
-                next_questions.append(question)
-                next_batch_history.append(history)
-                next_traces.append(trace + f"Context: {selected_doc['text']}\n")
+            next_questions.append(question)
+            next_batch_history.append(history)
+            next_traces.append(trace + f"Context: {selected_doc['text']}\n")
 
         questions = next_questions
         batch_history = next_batch_history
@@ -190,18 +175,11 @@ def parse_args():
     query_generator_group.add_argument("--qg-temperature", type=float, default=0.7, help="Temperature for query generator")
     query_generator_group.add_argument("--qg-top-p", type=float, default=0.9, help="Top-p sampling for query generator")
 
-    verifier_group = parser.add_argument_group("Verifier Options")
-    verifier_group.add_argument("--verifier-model-id", type=str, default="microsoft/DeBERTa-v3-large", help="Model ID for verifier")
-    verifier_group.add_argument("--verifier-checkpoint-path", type=str, required=True, help="Checkpoint path for trained model")
-    verifier_group.add_argument("--verifier-batch-size", type=int, default=8, help="Batch size for verifier")
-    verifier_group.add_argument("--verifier-max-length", type=int, default=DEBERTA_MAX_LENGTH, help="Maximum length for verifier input")
-
     main_group = parser.add_argument_group("Main Options")
     main_group.add_argument("--questions", type=str, required=True, help="Questions file path")
     main_group.add_argument("--batch-size", type=int, default=32, help="Batch size for processing questions")
     main_group.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
-    main_group.add_argument("--verifier-threshold", type=float, default=0.9, help="Threshold for verifier scores")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
     main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
@@ -232,13 +210,6 @@ def main(args: argparse.Namespace):
         top_p=args.qg_top_p,
     )
 
-    verifier = Verifier(
-        model_id=args.verifier_model_id,
-        checkpoint_path=args.verifier_checkpoint_path,
-        batch_size=args.verifier_batch_size,
-        max_length=args.verifier_max_length,
-    )
-
     if args.stop_log_path:
         open(args.stop_log_path,"w", encoding="utf-8").close()
 
@@ -258,11 +229,9 @@ def main(args: argparse.Namespace):
         em, precision, recall, f1 = run_batch(
             retriever=retriever,
             query_generator=query_generator,
-            verifier=verifier,
             questions=batch_questions,
             max_iterations=args.max_iterations,
             max_search=args.max_search,
-            verifier_threshold=args.verifier_threshold,
             log_trace=args.log_trace,
             stop_log_path=args.stop_log_path,
         )

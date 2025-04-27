@@ -56,8 +56,8 @@ def run_batch(retriever, query_generator, verifier, questions,
                     print(f"  Score: {score:.2f} | Passage: {doc['text']}")
                 print()
 
-        questions = []
-        batch_history = []
+        next_questions = []
+        next_batch_history = []
 
         for question, history, docs, scores in zip(questions, batch_history, batch_docs, batch_scores):
             for i, doc in enumerate(docs):
@@ -77,8 +77,11 @@ def run_batch(retriever, query_generator, verifier, questions,
                     "stop_iter": iter_count + 1
                 })
             else:
-                questions.append(question)
-                batch_history.append(history)
+                next_questions.append(question)
+                next_batch_history.append(history)
+
+        questions = next_questions
+        batch_history = next_batch_history
 
         print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
         print(f"Remaining questions: {len(questions)}\n")
@@ -174,7 +177,7 @@ def parse_args():
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--verifier-threshold", type=float, default=0.9, help="Threshold for verifier scores")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
-    main_group.add_argument("--stop-log-path", type=str, default=None, help="Path to the JSONL file where stop logs are written (Optional)")
+    main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
     args = parser.parse_args()
     return args

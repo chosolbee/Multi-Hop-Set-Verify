@@ -41,19 +41,19 @@ def run_batch(retriever, query_generator, verifier, questions,
     while questions:
         start_time = time.time()
 
-        next_questions = []
-        next_batch_history = []
-        next_traces = []
-        next_queries = []
-
         traces, queries = query_generator.batch_generate(traces, is_first=iter_count == 0)
+
+        search_questions = []
+        search_batch_history = []
+        search_traces = []
+        search_queries = []
 
         for question, history, trace, query in zip(questions, batch_history, traces, queries):
             if query:
-                next_questions.append(question)
-                next_batch_history.append(history)
-                next_traces.append(trace)
-                next_queries.append(query)
+                search_questions.append(question)
+                search_batch_history.append(history)
+                search_traces.append(trace)
+                search_queries.append(query)
             else:
                 final_questions.append(question)
                 final_batch_history.append(history)
@@ -64,15 +64,15 @@ def run_batch(retriever, query_generator, verifier, questions,
                     print("** Finished processing question. (QG) **")
                     print("\n")
 
-        batch_docs = retriever.search(next_queries, max_search)
-        batch_scores = verifier.batch_verify(next_questions, next_batch_history, batch_docs)
+        batch_docs = retriever.search(search_queries, max_search)
+        batch_scores = verifier.batch_verify(search_questions, search_batch_history, batch_docs)
 
-        questions = []
-        batch_history = []
-        traces = []
+        next_questions = []
+        next_batch_history = []
+        next_traces = []
 
         for question, history, trace, query, docs, scores in zip(
-            next_questions, next_batch_history, next_traces, next_queries, batch_docs, batch_scores
+            search_questions, search_batch_history, search_traces, search_queries, batch_docs, batch_scores
         ):
             for i, doc in enumerate(docs):
                 if doc["id"] in {d["id"] for d in history}:
@@ -103,22 +103,27 @@ def run_batch(retriever, query_generator, verifier, questions,
                     "stop_iter": iter_count + 1
                 })
             else:
-                questions.append(question)
-                batch_history.append(history)
-                traces.append(trace + f"Context: {selected_doc['text']}\n")
+                next_questions.append(question)
+                next_batch_history.append(history)
+                next_traces.append(trace + f"Context: {selected_doc['text']}\n")
+
+        questions = next_questions
+        batch_history = next_batch_history
+        traces = next_traces
 
         print("Iteration", iter_count + 1, "completed in", time.time() - start_time, "seconds")
         print(f"Remaining questions: {len(questions)}\n")
 
         iter_count += 1
         if iter_count >= max_iterations:
-            final_questions.extend(questions)
-            final_batch_history.extend(batch_history)
-            stop_logs.append({
-                "question_id": question["id"],
-                "gold_hop": len(question.get("question_decomposition", [])),
-                "stop_iter": iter_count
-            })
+            for question, history in zip(questions, batch_history):
+                final_questions.append(question)
+                final_batch_history.append(history)
+                stop_logs.append({
+                    "question_id": question["id"],
+                    "gold_hop": len(question.get("question_decomposition", [])),
+                    "stop_iter": iter_count
+                })
             break
 
     if log_trace:
@@ -148,10 +153,6 @@ def run_batch(retriever, query_generator, verifier, questions,
         precision = correct / retrieved if retrieved else 0.0
         recall = correct / gold_hop if gold_hop else 0.0
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-
-        # DEBUG
-        print(f"[DEBUG] qid={qid}, gold_hop={gold_hop}, history_ids={[d['id'] for d in history]}, "
-              f"correct={correct}, retrieved={retrieved}, em={em:.3f}, recall={recall:.3f}, precision={precision:.3f}")
 
         for log in stop_logs:
             if log["question_id"] == qid:
@@ -202,7 +203,8 @@ def parse_args():
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--verifier-threshold", type=float, default=0.9, help="Threshold for verifier scores")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
-    main_group.add_argument("--stop-log-path", type=str, default=None, help="Path to the JSONL file where stop logs are written (Optional)")
+    main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
+
     args = parser.parse_args()
     return args
 

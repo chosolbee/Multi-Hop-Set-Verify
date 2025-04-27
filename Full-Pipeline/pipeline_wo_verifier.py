@@ -53,8 +53,8 @@ def run_batch(retriever, query_generator, questions,
                     print(f"  Passage: {doc['text']}")
                 print()
 
-        questions = []
-        batch_history = []
+        next_questions = []
+        next_batch_history = []
 
         for question, history, query, docs in zip(questions, batch_history, queries, batch_docs):
             if query.strip().lower() == "<stop>":
@@ -72,8 +72,11 @@ def run_batch(retriever, query_generator, questions,
                     if cand["id"] not in existing_ids:
                         history.append(cand)
                         break
-                questions.append(question)
-                batch_history.append(history)
+                next_questions.append(question)
+                next_batch_history.append(history)
+
+        questions = next_questions
+        batch_history = next_batch_history
 
         print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
         print(f"Remaining questions: {len(questions)}\n")
@@ -125,7 +128,6 @@ def run_batch(retriever, query_generator, questions,
             for log in stop_logs:
                 f.write(json.dumps(log, ensure_ascii=False) + "\n")
 
-    print_results(em_list, precision_list, recall_list, f1_list)
     return em_list, precision_list, recall_list, f1_list
 
 
@@ -137,7 +139,9 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument("--qg-cache-dir", type=str, help="Cache directory for query generator model")
+    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator")
+    query_generator_group.add_argument("--qg-tp-size", type=int, default=1, help="Tensor parallel size for query generator")
+    query_generator_group.add_argument("--qg-quantization", type=str, help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")
     query_generator_group.add_argument("--qg-temperature", type=float, default=0.7, help="Temperature for query generator")
     query_generator_group.add_argument("--qg-top-p", type=float, default=0.9, help="Top-p sampling for query generator")
@@ -148,7 +152,7 @@ def parse_args():
     main_group.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
-    main_group.add_argument("--stop-log-path", type=str, default=None, help="Path to the JSONL file where stop logs are written (Optional)")
+    main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
     return parser.parse_args()
 
@@ -168,8 +172,9 @@ def main(args: argparse.Namespace):
     )
 
     query_generator = QueryGenerator(
-        model_id="meta-llama/Meta-Llama-3-8B-Instruct",
-        cache_dir=args.qg_cache_dir,
+        model_id=args.qg_model_id,
+        tp_size=args.qg_tp_size,
+        quantization=args.qg_quantization,
         max_gen_length=args.qg_max_gen_length,
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
@@ -204,6 +209,7 @@ def main(args: argparse.Namespace):
             precision_list[j].extend(precision[j])
             recall_list[j].extend(recall[j])
             f1_list[j].extend(f1[j])
+        print_results(em_list, precision_list, recall_list, f1_list)
 
     print("Final Results:")
     print_results(em_list, precision_list, recall_list, f1_list)

@@ -24,7 +24,7 @@ def print_results(em_list, precision_list, recall_list, f1_list):
     print("Total Recall", sum(recall_flat) / len(recall_flat) if recall_flat else 0)
     print("F1:", [sum(f1) / len(f1) if f1 else 0 for f1 in f1_list])
     print("Total F1", sum(f1_flat) / len(f1_flat) if f1_flat else 0)
-    print("\n")
+    print()
 
 
 def run_batch(retriever, query_generator, verifier, questions,
@@ -105,7 +105,7 @@ def run_batch(retriever, query_generator, verifier, questions,
             print("2. History:")
             for doc in history:
                 print(f"  Passage: {doc['text']}")
-            print("\n")
+            print()
 
     em_list = [[], [], []]
     precision_list = [[], [], []]
@@ -146,7 +146,6 @@ def run_batch(retriever, query_generator, verifier, questions,
             for log in stop_logs:
                 f.write(json.dumps(log,ensure_ascii=False)+'\n')
 
-    print_results(em_list, precision_list, recall_list, f1_list)
     return em_list, precision_list, recall_list, f1_list
 
 
@@ -158,12 +157,15 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument("--qg-cache-dir", type=str, help="Cache directory for query generator model")
+    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator")
+    query_generator_group.add_argument("--qg-tp-size", type=int, default=1, help="Tensor parallel size for query generator")
+    query_generator_group.add_argument("--qg-quantization", type=str, help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")
     query_generator_group.add_argument("--qg-temperature", type=float, default=0.7, help="Temperature for query generator")
     query_generator_group.add_argument("--qg-top-p", type=float, default=0.9, help="Top-p sampling for query generator")
 
     verifier_group = parser.add_argument_group("Verifier Options")
+    verifier_group.add_argument("--verifier-model-id", type=str, default="microsoft/DeBERTa-v3-large", help="Model ID for verifier")
     verifier_group.add_argument("--verifier-checkpoint-path", type=str, required=True, help="Checkpoint path for trained model")
     verifier_group.add_argument("--verifier-batch-size", type=int, default=8, help="Batch size for verifier")
     verifier_group.add_argument("--verifier-max-length", type=int, default=DEBERTA_MAX_LENGTH, help="Maximum length for verifier input")
@@ -196,15 +198,16 @@ def main(args: argparse.Namespace):
     )
 
     query_generator = QueryGenerator(
-        model_id="meta-llama/Meta-Llama-3-8B-Instruct",
-        cache_dir=args.qg_cache_dir,
+        model_id=args.qg_model_id,
+        tp_size=args.qg_tp_size,
+        quantization=args.qg_quantization,
         max_gen_length=args.qg_max_gen_length,
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
     )
 
     verifier = Verifier(
-        model_id="microsoft/DeBERTa-v3-large",
+        model_id=args.verifier_model_id,
         checkpoint_path=args.verifier_checkpoint_path,
         batch_size=args.verifier_batch_size,
         max_length=args.verifier_max_length,
@@ -234,13 +237,14 @@ def main(args: argparse.Namespace):
             max_search=args.max_search,
             verifier_threshold=args.verifier_threshold,
             log_trace=args.log_trace,
-            stop_log_path=args.stop_log_path  
+            stop_log_path=args.stop_log_path,
         )
         for j in range(3):
             em_list[j].extend(em[j])
             precision_list[j].extend(precision[j])
             recall_list[j].extend(recall[j])
             f1_list[j].extend(f1[j])
+        print_results(em_list, precision_list, recall_list, f1_list)
 
     print("Final Results:")
     print_results(em_list, precision_list, recall_list, f1_list)

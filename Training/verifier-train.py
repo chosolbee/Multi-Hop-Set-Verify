@@ -353,6 +353,8 @@ def main():
         report_to=["wandb"],
         run_name=args.run_name,
         load_best_model_at_end=True,
+        metric_for_best_model="pairwise_accuracy",
+        greater_is_better=True, 
         ddp_find_unused_parameters=False,
         fp16=args.fp16,
     )

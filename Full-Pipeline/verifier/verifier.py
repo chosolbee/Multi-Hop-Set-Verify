@@ -1,8 +1,7 @@
 import argparse
 import torch
 from torch.utils.data import Dataset
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments, EvalPrediction
-from transformers.trainer_callback import TrainerCallback
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
 from config import DEBERTA_MAX_LENGTH
 
 
@@ -47,14 +46,21 @@ class VerifierDataset(Dataset):
 class Verifier:
     def __init__(self, model_id, checkpoint_path, batch_size, max_length=DEBERTA_MAX_LENGTH):
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.model = AutoModelForSequenceClassification.from_pretrained(checkpoint_path, num_labels=1)
-        self.model.config.problem_type = "regression"
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            checkpoint_path,
+            num_labels=1,
+            problem_type="regression",
+            torch_dtype=torch.float16,
+            device_map="auto",
+            low_cpu_mem_usage=True,
+        )
         self.max_length = max_length
 
         self.training_args = TrainingArguments(
             per_device_eval_batch_size=batch_size,
             remove_unused_columns=False,
             output_dir="results/tmp",  # required but not used for prediction
+            fp16=True,
         )
 
         self.trainer = Trainer(
@@ -71,7 +77,7 @@ class Verifier:
 
     def batch_verify(self, questions, batch_history, batch_passages):
         test_dataset = VerifierDataset(questions, batch_history, batch_passages, self.tokenizer, self.max_length)
-    
+
         predictions_output = self.trainer.predict(test_dataset)
         all_logits = predictions_output.predictions.flatten()
         all_preds = torch.sigmoid(torch.tensor(all_logits)).numpy()

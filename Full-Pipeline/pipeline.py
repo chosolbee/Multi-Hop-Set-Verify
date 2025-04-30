@@ -1,12 +1,18 @@
 import os
+import re
 import time
 import json
 import argparse
 import wandb
+from collections import Counter
+from vllm import LLM, SamplingParams
+import torch
+
 from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
 from .contriever import Retriever
 from .query_generator import QueryGenerator
 from .verifier import Verifier
+from .answer_generator import AnswerGenerator
 
 
 def print_results(em_list, precision_list, recall_list, f1_list):
@@ -26,10 +32,37 @@ def print_results(em_list, precision_list, recall_list, f1_list):
     print("Total F1", sum(f1_flat) / len(f1_flat) if f1_flat else 0)
     print()
 
+def normalize(text: str) -> str:
+    text = text.strip().lower()
+    text = re.sub(r'\b(a|an|the)\b', '', text)
+    text = re.sub(r'[^\w\s]', '', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def token_f1(pred: str, gold: str) -> float:
+    p, g = normalize(pred).split(), normalize(gold).split()
+    if not p or not g:
+        return 0.0
+    common = Counter(p) & Counter(g)
+    overlap = sum(common.values())
+    if overlap == 0:
+        return 0.0
+    precision = overlap / len(p)
+    recall = overlap / len(g)
+    return 2 * precision * recall / (precision + recall)
+
+
+def print_answer_metrics(em_all, f1_all):
+    if not em_all:
+        return
+    print(f"Answer EM : {sum(em_all) / len(em_all):.4f}")
+    print(f"Answer F1 : {sum(f1_all) / len(f1_all):.4f}\n")
+
 
 def run_batch(retriever, query_generator, verifier, questions,
               max_iterations=5, max_search=10, verifier_threshold=0.9,
               log_trace=False, stop_log_path=None):
+    
     final_questions = []
     final_batch_history = []
     batch_history = [[] for _ in range(len(questions))]
@@ -115,17 +148,17 @@ def run_batch(retriever, query_generator, verifier, questions,
     for question, history in zip(final_questions, final_batch_history):
         qid = question["id"]
         gold_hop = len(question.get("question_decomposition", []))
-
         correct = sum(int(qid + "-sf" in doc["id"]) for doc in history)
         retrieved = len(history)
+
         em = int(correct == gold_hop and retrieved == gold_hop)
         precision = correct / retrieved if retrieved else 0.0
         recall = correct / gold_hop if gold_hop else 0.0
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
 
-        # DEBUG
-        print(f"[DEBUG] qid={qid}, gold_hop={gold_hop}, history_ids={[d['id'] for d in history]}, "
-              f"correct={correct}, retrieved={retrieved}, em={em:.3f}, recall={recall:.3f}, precision={precision:.3f}")
+        # # DEBUG
+        # print(f"[DEBUG] qid={qid}, gold_hop={gold_hop}, history_ids={[d['id'] for d in history]}, "
+        #       f"correct={correct}, retrieved={retrieved}, em={em:.3f}, recall={recall:.3f}, precision={precision:.3f}")
 
         for log in stop_logs:
             if log["question_id"] == qid:
@@ -143,7 +176,7 @@ def run_batch(retriever, query_generator, verifier, questions,
             for log in stop_logs:
                 f.write(json.dumps(log,ensure_ascii=False)+'\n')
 
-    return em_list, precision_list, recall_list, f1_list
+    return em_list, precision_list, recall_list, f1_list, final_questions, final_batch_history
 
 
 def parse_args():
@@ -166,6 +199,12 @@ def parse_args():
     verifier_group.add_argument("--verifier-checkpoint-path", type=str, required=True, help="Checkpoint path for trained model")
     verifier_group.add_argument("--verifier-batch-size", type=int, default=8, help="Batch size for verifier")
     verifier_group.add_argument("--verifier-max-length", type=int, default=DEBERTA_MAX_LENGTH, help="Maximum length for verifier input")
+
+    answer_generator_group = parser.add_argument_group("Answer Generator Options")
+    answer_generator_group.add_argument("--generate-answers", action="store_true")
+    answer_generator_group.add_argument("--ag-max-gen-length",type=int, default=1024, help="Maximum generation length for answer generator")
+    answer_generator_group.add_argument("--ag-temperature", type=float, default=0.7, help="Temperature for answer generator")
+    answer_generator_group.add_argument("--ag-top-p", type=float, default=0.9, help="Top-p sampling for answer generator")
 
     main_group = parser.add_argument_group("Main Options")
     main_group.add_argument("--questions", type=str, required=True, help="Questions file path")
@@ -194,10 +233,17 @@ def main(args: argparse.Namespace):
         model_path="facebook/contriever-msmarco",
     )
 
-    query_generator = QueryGenerator(
-        model_id=args.qg_model_id,
-        tp_size=args.qg_tp_size,
+    shared_llm = LLM(
+        model=args.qg_model_id,
+        tensor_parallel_size=args.qg_tp_size,
         quantization=args.qg_quantization,
+        dtype=torch.bfloat16,
+        gpu_memory_utilization=0.9,
+        trust_remote_code=True,
+    )
+    
+    query_generator = QueryGenerator(
+        llm=shared_llm,
         max_gen_length=args.qg_max_gen_length,
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
@@ -210,6 +256,16 @@ def main(args: argparse.Namespace):
         max_length=args.verifier_max_length,
     )
 
+    answer_generator = None
+    if args.generate_answers:
+        answer_generator = AnswerGenerator(
+            llm=shared_llm,
+            max_gen_length=args.ag_max_gen_length,
+            temperature=args.ag_temperature,
+            top_p=args.ag_top_p,
+        )
+
+
     if args.stop_log_path:
         open(args.stop_log_path,"w", encoding="utf-8").close()
 
@@ -221,11 +277,14 @@ def main(args: argparse.Namespace):
     recall_list = [[], [], []]
     f1_list = [[], [], []]
 
+    ans_em_list  = [[], [], []]
+    ans_f1_list  = [[], [], []] 
+
     for i in range(0, len(questions), args.batch_size):
         batch_questions = questions[i: i + args.batch_size]
         print(f"Processing batch {i // args.batch_size + 1} of {len(questions) // args.batch_size + 1}...\n")
 
-        em, precision, recall, f1 = run_batch(
+        em, precision, recall, f1, final_q, final_hist = run_batch(
             retriever=retriever,
             query_generator=query_generator,
             verifier=verifier,
@@ -241,10 +300,53 @@ def main(args: argparse.Namespace):
             precision_list[j].extend(precision[j])
             recall_list[j].extend(recall[j])
             f1_list[j].extend(f1[j])
-        print_results(em_list, precision_list, recall_list, f1_list)
 
-    print("Final Results:")
+        if args.generate_answers: 
+            preds = answer_generator.batch_answer(final_q, final_hist)
+
+            if len(preds) != len(final_q):
+                print(f"[WARNING] Number of predictions ({len(preds)}) != number of questions ({len(final_q)})")
+
+            for q, pred in zip(final_q, preds):
+                hop      = len(q.get("question_decomposition", []))
+                bucket   = max(hop - 2, 0)  
+                golds    = [q["answer"]] + q.get("answer_aliases", [])
+                golds    = [normalize(g) for g in golds]
+
+                pn       = normalize(pred)
+                em_ok    = int(pn in golds)
+                f1_best  = max(token_f1(pn, g) for g in golds)
+
+                print(
+                    f"[ANS-DEBUG] qid={q['id']} | gold={golds} | "
+                    f"pred={pn} | EM={em_ok:.0f}, F1={f1_best:.3f}"
+                )
+
+                ans_em_list[bucket].append(em_ok)
+                ans_f1_list[bucket].append(f1_best) 
+
+        print("===== RETRIEVAL PERFORMANCE =====")
+        print_results(em_list, precision_list, recall_list, f1_list)
+        if args.generate_answers:
+            dummy_prec_rec = [
+            [0.0] if len(bucket) == 0 else [0.0] * len(bucket)
+            for bucket in ans_em_list
+        ]
+        print("===== ANSWER  PERFORMANCE =====")
+        print_results(ans_em_list, dummy_prec_rec, dummy_prec_rec, ans_f1_list)
+
+    print("===== FINAL RETRIEVAL METRICS =====")
     print_results(em_list, precision_list, recall_list, f1_list)
+
+    print("===== FINAL ANSWER  METRICS =====")
+    if args.generate_answers:
+        dummy_prec_rec = [
+            [0.0] if len(bucket) == 0 else [0.0] * len(bucket)
+            for bucket in ans_em_list
+        ]
+        print_results(ans_em_list, dummy_prec_rec, dummy_prec_rec, ans_f1_list)
+
+    
     print("All done!")
 
     wandb.finish()

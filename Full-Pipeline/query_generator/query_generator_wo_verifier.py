@@ -6,17 +6,10 @@ from .prompts import COT_WO_VERIFIER_PROMPT
 
 
 class QueryGenerator:
-    def __init__(self, model_id, tp_size, quantization, max_gen_length=200, temperature=0.7, top_p=0.9):
+    def __init__(self, llm, max_gen_length=200, temperature=0.7, top_p=0.9):
         os.environ['MKL_THREADING_LAYER']='GNU'
 
-        self.llm = LLM(
-            model=model_id,
-            tensor_parallel_size=tp_size,
-            quantization=quantization,
-            dtype=torch.bfloat16,
-            gpu_memory_utilization=0.9,
-            trust_remote_code=True,
-        )
+        self.llm = llm
 
         self.sampling_params = SamplingParams(
             temperature=temperature,

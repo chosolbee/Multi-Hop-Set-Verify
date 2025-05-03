@@ -12,8 +12,8 @@ import wandb
 from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
 from .contriever import Retriever
 from .query_generator import QueryGenerator
-from .verifier import Verifier
 from .answer_generator import AnswerGenerator
+from .verifier import Verifier
 
 
 def print_metrics(metrics_list, metric_name="Metrics"):
@@ -56,13 +56,14 @@ def token_f1(pred: str, gold: str) -> float:
 
 
 def compute_retrieval_metrics(questions: List[Dict[str, Any]],
-                              histories: List[List[Dict[str, Any]]]) -> Tuple[List[List[float]], ...]:
+                              batch_history: List[List[Dict[str, Any]]],
+                              stop_logs: List[Dict[str, Any]]) -> Tuple[List[List[float]], ...]:
     em_list = [[], [], []]
     precision_list = [[], [], []]
     recall_list = [[], [], []]
     f1_list = [[], [], []]
 
-    for question, history in zip(questions, histories):
+    for question, history in zip(questions, batch_history):
         qid = question["id"]
         gold_hop = len(question.get("question_decomposition", []))
         correct = sum(int(qid + "-sf" in doc["id"]) for doc in history)
@@ -72,6 +73,11 @@ def compute_retrieval_metrics(questions: List[Dict[str, Any]],
         precision = correct / retrieved if retrieved else 0.0
         recall = correct / gold_hop if gold_hop else 0.0
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+
+        for log in stop_logs:
+            if log["question_id"] == qid:
+                log.update({"em": em, "precision": precision, "recall": recall, "f1": f1})
+                break
 
         idx = min(max(gold_hop - 2, 0), 2)
         em_list[idx].append(em)
@@ -83,7 +89,7 @@ def compute_retrieval_metrics(questions: List[Dict[str, Any]],
 
 
 def compute_answer_metrics(questions: List[Dict[str, Any]],
-                          predictions: List[str]) -> Tuple[List[List[float]], List[List[float]]]:
+                           predictions: List[str]) -> Tuple[List[List[float]], List[List[float]]]:
     em_list = [[], [], []]
     f1_list = [[], [], []]
 
@@ -196,36 +202,21 @@ def run_batch(retriever: Retriever,
                 print(f"  Passage: {doc['text']}")
             print()
 
-    em_list, precision_list, recall_list, f1_list = compute_retrieval_metrics(final_questions, final_batch_history)
-
-    for question, history in zip(final_questions, final_batch_history):
-        qid = question["id"]
-        gold_hop = len(question.get("question_decomposition", []))
-        correct = sum(int(qid + "-sf" in doc["id"]) for doc in history)
-        retrieved = len(history)
-
-        em = int(correct == gold_hop and retrieved == gold_hop)
-        precision = correct / retrieved if retrieved else 0.0
-        recall = correct / gold_hop if gold_hop else 0.0
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-
-        for log in stop_logs:
-            if log["question_id"] == qid:
-                log.update({"em": em, "precision": precision, "recall": recall, "f1": f1})
-                break
+    em_list, precision_list, recall_list, f1_list = compute_retrieval_metrics(final_questions, final_batch_history, stop_logs)
 
     if stop_log_path:
         with open(stop_log_path, 'a', encoding='utf-8') as f:
             for log in stop_logs:
                 f.write(json.dumps(log, ensure_ascii=False) + '\n')
 
-    predictions = []
-    ans_em_list = [[], [], []]
-    ans_f1_list = [[], [], []]
-
     if generate_answers and answer_generator:
-        predictions = answer_generator.batch_answer(final_questions, final_batch_history)
-        ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, predictions)
+        final_predictions = answer_generator.batch_answer(final_questions, final_batch_history)
+        ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, final_predictions)
+    else:
+        final_predictions = []
+        ans_em_list = [[], [], []]
+        ans_f1_list = [[], [], []]
+
 
     metrics = {
         "retrieval": {
@@ -240,7 +231,7 @@ def run_batch(retriever: Retriever,
         }
     }
 
-    return final_questions, final_batch_history, metrics, predictions
+    return final_questions, final_batch_history, final_predictions, metrics
 
 
 def parse_args():
@@ -323,7 +314,6 @@ def main():
         max_length=args.verifier_max_length,
     )
 
-    answer_generator = None
     if args.generate_answers:
         answer_generator = AnswerGenerator(
             llm=shared_llm,
@@ -331,6 +321,8 @@ def main():
             temperature=args.ag_temperature,
             top_p=args.ag_top_p,
         )
+    else:
+        answer_generator = None
 
     if args.stop_log_path:
         open(args.stop_log_path, "w", encoding="utf-8").close()
@@ -338,6 +330,9 @@ def main():
     with open(args.questions, "r", encoding="utf-8") as f:
         questions = [json.loads(line) for line in f]
 
+    all_final_questions = []
+    all_final_batch_history = []
+    all_final_predictions = []
     all_metrics = {
         "retrieval": {
             "em": [[], [], []],
@@ -351,16 +346,12 @@ def main():
         }
     }
 
-    all_predictions = []
-    all_final_questions = []
-    all_final_histories = []
-
     total_batches = (len(questions) + args.batch_size - 1) // args.batch_size
     for i in range(0, len(questions), args.batch_size):
         batch_questions = questions[i:i + args.batch_size]
         print(f"\nProcessing batch {i // args.batch_size + 1} of {total_batches}...\n")
 
-        final_questions, final_histories, batch_metrics, predictions = run_batch(
+        final_questions, final_batch_history, final_predictions, metrics = run_batch(
             retriever=retriever,
             query_generator=query_generator,
             verifier=verifier,
@@ -375,26 +366,26 @@ def main():
         )
 
         all_final_questions.extend(final_questions)
-        all_final_histories.extend(final_histories)
-        all_predictions.extend(predictions)
+        all_final_batch_history.extend(final_batch_history)
+        all_final_predictions.extend(final_predictions)
 
         for metric_type in ["retrieval", "answer"]:
-            for metric_name in batch_metrics[metric_type]:
+            for metric_name in metrics[metric_type]:
                 for hop_idx in range(3):
                     all_metrics[metric_type][metric_name][hop_idx].extend(
-                        batch_metrics[metric_type][metric_name][hop_idx]
+                        metrics[metric_type][metric_name][hop_idx]
                     )
 
         print("\n===== BATCH RETRIEVAL METRICS =====")
-        print_metrics(batch_metrics["retrieval"]["em"], "EM")
-        print_metrics(batch_metrics["retrieval"]["precision"], "Precision")
-        print_metrics(batch_metrics["retrieval"]["recall"], "Recall")
-        print_metrics(batch_metrics["retrieval"]["f1"], "F1")
+        print_metrics(metrics["retrieval"]["em"], "EM")
+        print_metrics(metrics["retrieval"]["precision"], "Precision")
+        print_metrics(metrics["retrieval"]["recall"], "Recall")
+        print_metrics(metrics["retrieval"]["f1"], "F1")
 
         if args.generate_answers:
             print("\n===== BATCH ANSWER METRICS =====")
-            print_metrics(batch_metrics["answer"]["em"], "EM")
-            print_metrics(batch_metrics["answer"]["f1"], "F1")
+            print_metrics(metrics["answer"]["em"], "EM")
+            print_metrics(metrics["answer"]["f1"], "F1")
 
     print("\n===== FINAL RETRIEVAL METRICS =====")
     print_metrics(all_metrics["retrieval"]["em"], "EM")
@@ -413,7 +404,7 @@ def main():
             "predictions": []
         }
 
-        for q, h, p in zip(all_final_questions, all_final_histories, all_predictions):
+        for q, h, p in zip(all_final_questions, all_final_batch_history, all_final_predictions):
             output_data["predictions"].append({
                 "id": q["id"],
                 "question": q["question"],

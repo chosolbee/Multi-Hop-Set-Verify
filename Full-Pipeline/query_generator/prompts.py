@@ -1,5 +1,4 @@
-COT_PROMPT = """
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+COT_SYSTEM_PROMPT = """
 You are tasked with generating targeted retrieval queries for multi-hop questions. A multi-hop question requires multiple pieces of information to be answered fully.
 
 Given:
@@ -40,9 +39,6 @@ Confirmed Passage 1: The Battle of Rich Mountain took place on July 11, 1861, in
 Confirmed Passage 2: Owing to its role in the state's history, the county motto is \"Where Illinois Began.\" It contains the historically important village of Kaskaskia, Illinois's first capital.
 Confirmed Passage 3: WIZE (1340 AM) — branded WIZE AM 1340 — is a commercial radio station in Springfield, Ohio owned by iHeartMedia, Inc. as part of their Dayton cluster. The station's main format is classic country targeted towards Springfield, and their transmitter - and former studios - are also located in Springfield.
 Your Response: From the given passages, I can see that the Battle of Rich Mountain occurred in Randolph County, Virginia (now West Virginia), and that Kaskaskia was Illinois's first capital. To answer the question, I need to know when Springfield became the capital of Illinois. Therefore, my retrieval query would be: <query>When did Springfield become the capital of Illinois?</query>
-<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
-Question: 
 """
 
 COT_WO_VERIFIER_PROMPT = """
@@ -98,8 +94,7 @@ Your Response: The question asks for the river flowing through Paris and the ico
 Question: 
 """
 
-SELF_ASK_PROMPT = """
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+SELF_ASK_SYSTEM_PROMPT = """
 Given the following question, answer it by providing follow up questions and intermediate answers.
 For each follow up question, you are given a context which is the top returned Wikipedia snippet for the question.
 First give an intermediate answer to the follow up question. Start the line with "Intermediate answer: ".
@@ -142,6 +137,8 @@ Follow up: When did hurricane sandy hit New York City?
 Context: Effects of Hurricane Sandy in New York: Hurricane Sandy Category 1 hurricane (SSHWS / NWS) Satellite image of Sandy at 4: 15 p.m. EDT on October 29 as it was about to make landfall on the Jersey Shore Formed October 28, 2012 (First rainbands begin to affect New Jersey) Dissipated November 2, 2012 (Dissipated as extratropical cyclone) (Extratropical after October 29) Highest winds 1 - minute sustained: 80 mph (130 km / h) Highest gust Gusts: 100 mph (155 km / h) Lowest pressure 945 mbar (hPa); 27.91 inHg Fatalities 53 total Damage $32 billion (2012 USD) (Estimated damage total) Areas affected New York, especially the New York metropolitan area Part of the 2012 Atlantic hurricane season Part of a series on Hurricane Sandy General Meteorological history Impact Greater Antilles United States Maryland and Washington, D.C. New Jersey New York New England Canada Other wikis Commons: Sandy images Wikinews: Sandy stories
 Intermediate answer: Hurricane sandy hit New York City in October 28, 2012.
 So the final answer is: October 28, 2012
-<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
 """
+
+SELF_ASK_USER_PROMPT_FIRST = "Give a follow up question."
+
+SELF_ASK_USER_PROMPT_NOT_FIRST = "Give an intermediate answer and a follow up question if needed. If not, give the final answer."

@@ -3,11 +3,11 @@ import re
 import time
 import json
 import argparse
-import wandb
 from collections import Counter
-from vllm import LLM, SamplingParams
-import torch
 from typing import List, Dict, Any, Tuple
+import torch
+from vllm import LLM
+import wandb
 
 from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
 from .contriever import Retriever
@@ -22,13 +22,13 @@ def print_metrics(metrics_list, metric_name="Metrics"):
         return
 
     metrics_flat = [item for sublist in metrics_list for item in sublist]
-    
+
     print(f"===== {metric_name} =====")
     print(f"Count: {[len(m) for m in metrics_list]}")
-    
+
     averages = [sum(m) / len(m) if m else 0 for m in metrics_list]
     print(f"{metric_name} by hop: {[f'{avg:.4f}' for avg in averages]}")
-    
+
     total_avg = sum(metrics_flat) / len(metrics_flat) if metrics_flat else 0
     print(f"Total {metric_name}: {total_avg:.4f}")
 
@@ -44,18 +44,18 @@ def token_f1(pred: str, gold: str) -> float:
     p, g = normalize(pred).split(), normalize(gold).split()
     if not p or not g:
         return 0.0
-    
+
     common = Counter(p) & Counter(g)
     overlap = sum(common.values())
     if overlap == 0:
         return 0.0
-    
+
     precision = overlap / len(p)
     recall = overlap / len(g)
     return 2 * precision * recall / (precision + recall)
 
 
-def compute_retrieval_metrics(questions: List[Dict[str, Any]], 
+def compute_retrieval_metrics(questions: List[Dict[str, Any]],
                               histories: List[List[Dict[str, Any]]]) -> Tuple[List[List[float]], ...]:
     em_list = [[], [], []]
     precision_list = [[], [], []]
@@ -73,7 +73,7 @@ def compute_retrieval_metrics(questions: List[Dict[str, Any]],
         recall = correct / gold_hop if gold_hop else 0.0
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
 
-        idx = min(max(gold_hop - 2, 0), 2) 
+        idx = min(max(gold_hop - 2, 0), 2)
         em_list[idx].append(em)
         precision_list[idx].append(precision)
         recall_list[idx].append(recall)
@@ -82,7 +82,7 @@ def compute_retrieval_metrics(questions: List[Dict[str, Any]],
     return em_list, precision_list, recall_list, f1_list
 
 
-def compute_answer_metrics(questions: List[Dict[str, Any]], 
+def compute_answer_metrics(questions: List[Dict[str, Any]],
                           predictions: List[str]) -> Tuple[List[List[float]], List[List[float]]]:
     em_list = [[], [], []]
     f1_list = [[], [], []]
@@ -90,30 +90,30 @@ def compute_answer_metrics(questions: List[Dict[str, Any]],
     for question, prediction in zip(questions, predictions):
         hop = len(question.get("question_decomposition", []))
         idx = min(max(hop - 2, 0), 2)
-        
+
         gold_answers = [question["answer"]] + question.get("answer_aliases", [])
         gold_answers = [normalize(g) for g in gold_answers]
-        
+
         norm_pred = normalize(prediction)
-        
+
         em = int(norm_pred in gold_answers)
         f1 = max(token_f1(norm_pred, g) for g in gold_answers)
-        
+
         em_list[idx].append(em)
         f1_list[idx].append(f1)
 
     return em_list, f1_list
 
 
-def run_batch(retriever: Retriever, 
-              query_generator: QueryGenerator, 
+def run_batch(retriever: Retriever,
+              query_generator: QueryGenerator,
               verifier: Verifier,
               answer_generator: AnswerGenerator,
               questions: List[Dict[str, Any]],
-              max_iterations: int = 5, 
-              max_search: int = 10, 
+              max_iterations: int = 5,
+              max_search: int = 10,
               verifier_threshold: float = 0.9,
-              log_trace: bool = False, 
+              log_trace: bool = False,
               generate_answers: bool = False,
               stop_log_path: str = None) -> Tuple[List[Dict[str, Any]], List[List[Dict[str, Any]]], Dict[str, List[List[float]]], List[str]]:
 
@@ -149,7 +149,7 @@ def run_batch(retriever: Retriever,
             for i, doc in enumerate(docs):
                 if doc["id"] in {d["id"] for d in history}:
                     scores[i] = -1
-                    
+
             max_score = scores.max()
             max_idx = scores.argmax()
             history.append(docs[max_idx])
@@ -197,7 +197,7 @@ def run_batch(retriever: Retriever,
             print()
 
     em_list, precision_list, recall_list, f1_list = compute_retrieval_metrics(final_questions, final_batch_history)
-    
+
     for question, history in zip(final_questions, final_batch_history):
         qid = question["id"]
         gold_hop = len(question.get("question_decomposition", []))
@@ -222,7 +222,7 @@ def run_batch(retriever: Retriever,
     predictions = []
     ans_em_list = [[], [], []]
     ans_f1_list = [[], [], []]
-    
+
     if generate_answers and answer_generator:
         predictions = answer_generator.batch_answer(final_questions, final_batch_history)
         ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, predictions)
@@ -286,7 +286,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    
+
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if local_rank in [-1, 0]:
         wandb.init(project="MultiHopQA-test", entity=WANDB_ENTITY)
@@ -308,7 +308,7 @@ def main():
         gpu_memory_utilization=0.9,
         trust_remote_code=True,
     )
-    
+
     query_generator = QueryGenerator(
         llm=shared_llm,
         max_gen_length=args.qg_max_gen_length,
@@ -350,7 +350,7 @@ def main():
             "f1": [[], [], []]
         }
     }
-    
+
     all_predictions = []
     all_final_questions = []
     all_final_histories = []
@@ -373,24 +373,24 @@ def main():
             generate_answers=args.generate_answers,
             stop_log_path=args.stop_log_path,
         )
-        
+
         all_final_questions.extend(final_questions)
         all_final_histories.extend(final_histories)
         all_predictions.extend(predictions)
-        
+
         for metric_type in ["retrieval", "answer"]:
             for metric_name in batch_metrics[metric_type]:
                 for hop_idx in range(3):
                     all_metrics[metric_type][metric_name][hop_idx].extend(
                         batch_metrics[metric_type][metric_name][hop_idx]
                     )
-        
+
         print("\n===== BATCH RETRIEVAL METRICS =====")
         print_metrics(batch_metrics["retrieval"]["em"], "EM")
         print_metrics(batch_metrics["retrieval"]["precision"], "Precision")
         print_metrics(batch_metrics["retrieval"]["recall"], "Recall")
         print_metrics(batch_metrics["retrieval"]["f1"], "F1")
-        
+
         if args.generate_answers:
             print("\n===== BATCH ANSWER METRICS =====")
             print_metrics(batch_metrics["answer"]["em"], "EM")
@@ -401,18 +401,18 @@ def main():
     print_metrics(all_metrics["retrieval"]["precision"], "Precision")
     print_metrics(all_metrics["retrieval"]["recall"], "Recall")
     print_metrics(all_metrics["retrieval"]["f1"], "F1")
-    
+
     if args.generate_answers:
         print("\n===== FINAL ANSWER METRICS =====")
         print_metrics(all_metrics["answer"]["em"], "EM")
         print_metrics(all_metrics["answer"]["f1"], "F1")
-    
+
     if args.output_path:
         output_data = {
             "metrics": all_metrics,
             "predictions": []
         }
-        
+
         for q, h, p in zip(all_final_questions, all_final_histories, all_predictions):
             output_data["predictions"].append({
                 "id": q["id"],
@@ -421,11 +421,11 @@ def main():
                 "prediction": p if p else "",
                 "passages": [doc["text"] for doc in h]
             })
-            
+
         os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
         with open(args.output_path, "w", encoding="utf-8") as f:
             json.dump(output_data, f, ensure_ascii=False, indent=2)
-    
+
     print("\nAll done!")
     wandb.finish()
 

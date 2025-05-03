@@ -7,7 +7,6 @@ from .prompts import ANSWER_SYSTEM_PROMPT
 
 class AnswerGenerator:
     def __init__(self, llm, max_gen_length=200, temperature=0.7, top_p=0.9):
-
         os.environ["MKL_THREADING_LAYER"] = "GNU"
 
         self.llm = llm
@@ -40,7 +39,6 @@ class AnswerGenerator:
         clean_texts = [self.extract_answer(output.outputs[0].text) for output in outputs]
 
         return clean_texts
-    
 
     def extract_answer(self, generated_text: str) -> str:
         match = re.search(r"<answer>(.*?)</answer>", generated_text, re.DOTALL)
@@ -48,15 +46,22 @@ class AnswerGenerator:
             extracted = match.group(1)
         else:
             extracted = re.sub(r'</s>|</answer>|<answer>', '', generated_text)
-    
+
         return extracted.strip()
 
 
 def test():
-    generator = AnswerGenerator(
-        model_id="meta-llama/Llama-3.1-8B-instruct",
-        tp_size=1,
+    llm = LLM(
+        model="meta-llama/Llama-3.1-8B-instruct",
+        tensor_parallel_size=1,
         quantization=None,
+        dtype=torch.bfloat16,
+        gpu_memory_utilization=0.9,
+        trust_remote_code=True,
+    )
+
+    answer_generator = AnswerGenerator(
+        llm=llm,
         max_gen_length=2048,
         temperature=0.7,
         top_p=0.9,
@@ -89,16 +94,16 @@ def test():
 
     print("\nGenerated Prompts:\n")
     for q, hist in zip(questions, batch_history):
-        prompt = generator._build_prompt(q["question"], hist)
+        prompt = answer_generator._build_prompt(q["question"], hist)
         print(f"Prompt for Q: {q['question']}\n{prompt}\n")
         print("-----------------------------")
 
-    answers = generator.batch_answer(questions, batch_history)
+    answers = answer_generator.batch_answer(questions, batch_history)
 
     print("===========================")
     print("\nGenerated Answers (Raw and Extracted):\n")
     for q, raw in zip(questions, answers):
-        extracted = AnswerGenerator.extract_answer(raw)
+        extracted = answer_generator.extract_answer(raw)
         print(f"Q: {q['question']}\nRaw Answer: {raw}\nExtracted Answer: {extracted}\n")
         print("-----------------------------")
 

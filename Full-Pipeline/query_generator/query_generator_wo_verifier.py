@@ -25,8 +25,6 @@ class QueryGenerator:
         prompt += "<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>"
         return prompt.strip()
 
-
-
     def batch_generate(self, questions, batch_confirmed_passages):
         prompts = [
             self._gen_retriever_query_prompt(question["question"], confirmed_passages)
@@ -51,10 +49,17 @@ class QueryGenerator:
 
 
 def test():
+    llm = LLM(
+        model="meta-llama/Llama-3.1-8B-instruct",
+        tensor_parallel_size=1,
+        quantization=None,
+        dtype=torch.bfloat16,
+        gpu_memory_utilization=0.9,
+        trust_remote_code=True,
+    )
+
     query_generator = QueryGenerator(
-        model_id="casperhansen/llama-3.3-70b-instruct-awq",
-        tp_size=2,
-        quantization="awq_marlin",
+        llm=llm,
         max_gen_length=2048,
         temperature=0.7,
         top_p=0.9,

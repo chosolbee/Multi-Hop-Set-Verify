@@ -21,7 +21,7 @@ class QueryGenerator:
     def _gen_retriever_query_prompt(self, trace, is_first=False):
         system_prompt = SELF_ASK_SYSTEM_PROMPT
         user_prompt = trace + (SELF_ASK_USER_PROMPT_FIRST if is_first else SELF_ASK_USER_PROMPT_NOT_FIRST)
-        conversation = [
+        prompt = [
             {
                 "role": "system",
                 "content":  system_prompt.strip(),
@@ -31,12 +31,12 @@ class QueryGenerator:
                 "content": user_prompt.strip(),
             },
         ]
-        return conversation
+        return prompt
 
     def batch_generate(self, traces, is_first=False):
-        conversations = [self._gen_retriever_query_prompt(trace, is_first) for trace in traces]
+        prompts = [self._gen_retriever_query_prompt(trace, is_first) for trace in traces]
 
-        outputs = self.llm.chat(conversations, self.sampling_params)
+        outputs = self.llm.chat(prompts, self.sampling_params)
 
         new_traces = []
         responses = []

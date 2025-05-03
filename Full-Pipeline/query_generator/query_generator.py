@@ -23,7 +23,7 @@ class QueryGenerator:
         if confirmed_passages:
             for idx, passage in enumerate(confirmed_passages, start=1):
                 user_prompt += f"\nConfirmed Passage {idx}: {passage['text']}"
-        conversation = [
+        prompt = [
             {
                 "role": "system",
                 "content":  system_prompt.strip(),
@@ -33,15 +33,15 @@ class QueryGenerator:
                 "content": user_prompt.strip(),
             },
         ]
-        return conversation
+        return prompt
 
     def batch_generate(self, questions, batch_confirmed_passages):
-        conversations = [
+        prompts = [
             self._gen_retriever_query_prompt(question["question"], confirmed_passages)
             for question, confirmed_passages in zip(questions, batch_confirmed_passages)
         ]
 
-        outputs = self.llm.chat(conversations, self.sampling_params)
+        outputs = self.llm.chat(prompts, self.sampling_params)
 
         clean_texts = [self.extract_query(output.outputs[0].text) for output in outputs]
         return clean_texts

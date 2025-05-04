@@ -1,5 +1,4 @@
 ANSWER_SYSTEM_PROMPT = """
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 You are an expert answer generator for multi-hop questions. Your job is to derive a precise, factual answer by connecting information **only** from the provided passages.
 
 Given:
@@ -68,9 +67,6 @@ Your Response:
   However, none of the passages mention the lowest geographical point in the U.K.
   Therefore, the answer cannot be determined from the given passages.
   <answer>Unknown</answer>
-<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
-Question: 
 """
 
 # ANSWER_SYSTEM_PROMPT = """

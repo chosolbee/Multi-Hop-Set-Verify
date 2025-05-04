@@ -17,27 +17,31 @@ class AnswerGenerator:
             max_tokens=max_gen_length,
         )
 
-    def _build_prompt(self,
-                      question: str,
-                      passages: List[dict]) -> str:
-
-        prompt = ANSWER_SYSTEM_PROMPT + question + "\n"
+    def _build_prompt(self, question: str, passages: List[dict]) -> str:
+        system_prompt = ANSWER_SYSTEM_PROMPT
+        user_prompt = "Question: " + question + "\n"
         for idx, p in enumerate(passages, start=1):
-            prompt += f"Passage {idx}: {p['text']}\n"
-        prompt += "<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>"
-        return prompt.strip()
-
-    def batch_answer(self,
-                     questions: List[dict],
-                     histories: List[List[dict]]) -> List[str]:
-        prompts = [
-            self._build_prompt(q["question"], passages)
-            for q, passages in zip(questions, histories)
+            user_prompt += f"Passage {idx}: {p['text']}\n"
+        prompt = [
+            {
+                "role": "system",
+                "content":  system_prompt.strip(),
+            },
+            {
+                "role": "user",
+                "content": user_prompt.strip(),
+            },
         ]
-        outputs = self.llm.generate(prompts, self.sampling_params)
+        return prompt
+
+    def batch_answer(self, questions: List[dict], batch_history: List[List[dict]]) -> List[str]:
+        prompts = [
+            self._build_prompt(question["question"], passages)
+            for question, passages in zip(questions, batch_history)
+        ]
+        outputs = self.llm.chat(prompts, self.sampling_params)
 
         clean_texts = [self.extract_answer(output.outputs[0].text) for output in outputs]
-
         return clean_texts
 
     def extract_answer(self, generated_text: str) -> str:

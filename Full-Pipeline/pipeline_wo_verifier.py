@@ -1,107 +1,17 @@
 import os
-import re
 import time
 import json
 import argparse
-from collections import Counter
 from typing import List, Dict, Any, Tuple
 import torch
 from vllm import LLM
 import wandb
 
 from config import WANDB_ENTITY
+from .utils import print_metrics, compute_retrieval_metrics, compute_answer_metrics
 from .contriever import Retriever
 from .query_generator.query_generator_wo_verifier import QueryGenerator
 from .answer_generator import AnswerGenerator
-
-
-def print_metrics(metrics_list, metric_name="Metrics"):
-    if not metrics_list or not any(metrics_list):
-        print(f"No {metric_name} available.")
-        return
-
-    metrics_flat = [item for sublist in metrics_list for item in sublist]
-
-    print(f"===== {metric_name} =====")
-    print(f"Count: {[len(m) for m in metrics_list]}")
-
-    averages = [sum(m) / len(m) if m else 0 for m in metrics_list]
-    print(f"{metric_name} by hop: {[f'{avg:.4f}' for avg in averages]}")
-
-    total_avg = sum(metrics_flat) / len(metrics_flat) if metrics_flat else 0
-    print(f"Total {metric_name}: {total_avg:.4f}")
-
-
-def normalize(text: str) -> str:
-    text = text.strip().lower()
-    text = re.sub(r'\b(a|an|the)\b', '', text)
-    text = re.sub(r'[^\w\s]', '', text)
-    return re.sub(r'\s+', ' ', text).strip()
-
-
-def token_f1(pred: str, gold: str) -> float:
-    p, g = normalize(pred).split(), normalize(gold).split()
-    if not p or not g:
-        return 0.0
-
-    common = Counter(p) & Counter(g)
-    overlap = sum(common.values())
-    if overlap == 0:
-        return 0.0
-
-    precision = overlap / len(p)
-    recall = overlap / len(g)
-    return 2 * precision * recall / (precision + recall)
-
-
-def compute_retrieval_metrics(questions: List[Dict[str, Any]],
-                              histories: List[List[Dict[str, Any]]]) -> Tuple[List[List[float]], ...]:
-    em_list = [[], [], []]
-    precision_list = [[], [], []]
-    recall_list = [[], [], []]
-    f1_list = [[], [], []]
-
-    for question, history in zip(questions, histories):
-        qid = question["id"]
-        gold_hop = len(question.get("question_decomposition", []))
-        correct = sum(int(qid + "-sf" in doc["id"]) for doc in history)
-        retrieved = len(history)
-
-        em = int(correct == gold_hop and retrieved == gold_hop)
-        precision = correct / retrieved if retrieved else 0.0
-        recall = correct / gold_hop if gold_hop else 0.0
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-
-        idx = min(max(gold_hop - 2, 0), 2)
-        em_list[idx].append(em)
-        precision_list[idx].append(precision)
-        recall_list[idx].append(recall)
-        f1_list[idx].append(f1)
-
-    return em_list, precision_list, recall_list, f1_list
-
-
-def compute_answer_metrics(questions: List[Dict[str, Any]],
-                          predictions: List[str]) -> Tuple[List[List[float]], List[List[float]]]:
-    em_list = [[], [], []]
-    f1_list = [[], [], []]
-
-    for question, prediction in zip(questions, predictions):
-        hop = len(question.get("question_decomposition", []))
-        idx = min(max(hop - 2, 0), 2)
-
-        gold_answers = [question["answer"]] + question.get("answer_aliases", [])
-        gold_answers = [normalize(g) for g in gold_answers]
-
-        norm_pred = normalize(prediction)
-
-        em = int(norm_pred in gold_answers)
-        f1 = max(token_f1(norm_pred, g) for g in gold_answers)
-
-        em_list[idx].append(em)
-        f1_list[idx].append(f1)
-
-    return em_list, f1_list
 
 
 def run_batch(retriever: Retriever,
@@ -188,36 +98,20 @@ def run_batch(retriever: Retriever,
                 print(f"  Passage: {doc['text']}")
             print()
 
-    em_list, precision_list, recall_list, f1_list = compute_retrieval_metrics(final_questions, final_batch_history)
-
-    for question, history in zip(final_questions, final_batch_history):
-        qid = question["id"]
-        gold_hop = len(question.get("question_decomposition", []))
-        correct = sum(int(qid + "-sf" in doc["id"]) for doc in history)
-        retrieved = len(history)
-
-        em = int(correct == gold_hop and retrieved == gold_hop)
-        precision = correct / retrieved if retrieved else 0.0
-        recall = correct / gold_hop if gold_hop else 0.0
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-
-        for log in stop_logs:
-            if log["question_id"] == qid:
-                log.update({"em": em, "precision": precision, "recall": recall, "f1": f1})
-                break
+    em_list, precision_list, recall_list, f1_list = compute_retrieval_metrics(final_questions, final_batch_history, stop_logs)
 
     if stop_log_path:
         with open(stop_log_path, 'a', encoding='utf-8') as f:
             for log in stop_logs:
                 f.write(json.dumps(log, ensure_ascii=False) + '\n')
 
-    predictions = []
-    ans_em_list = [[], [], []]
-    ans_f1_list = [[], [], []]
-
     if generate_answers and answer_generator:
-        predictions = answer_generator.batch_answer(final_questions, final_batch_history)
-        ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, predictions)
+        final_predictions = answer_generator.batch_answer(final_questions, final_batch_history)
+        ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, final_predictions)
+    else:
+        final_predictions = []
+        ans_em_list = [[], [], []]
+        ans_f1_list = [[], [], []]
 
     metrics = {
         "retrieval": {
@@ -232,7 +126,7 @@ def run_batch(retriever: Retriever,
         }
     }
 
-    return final_questions, final_batch_history, metrics, predictions
+    return final_questions, final_batch_history, final_predictions, metrics
 
 
 def parse_args():
@@ -300,7 +194,6 @@ def main():
         top_p=args.qg_top_p,
     )
 
-    answer_generator = None
     if args.generate_answers:
         answer_generator = AnswerGenerator(
             llm=shared_llm,
@@ -308,6 +201,8 @@ def main():
             temperature=args.ag_temperature,
             top_p=args.ag_top_p,
         )
+    else:
+        answer_generator = None
 
     if args.stop_log_path:
         open(args.stop_log_path, "w", encoding="utf-8").close()
@@ -328,16 +223,16 @@ def main():
         }
     }
 
-    all_predictions = []
+    all_final_predictions = []
     all_final_questions = []
-    all_final_histories = []
+    all_final_batch_history = []
 
     total_batches = (len(questions) + args.batch_size - 1) // args.batch_size
     for i in range(0, len(questions), args.batch_size):
         batch_questions = questions[i:i + args.batch_size]
         print(f"\nProcessing batch {i // args.batch_size + 1} of {total_batches}...\n")
 
-        final_questions, final_histories, batch_metrics, predictions = run_batch(
+        final_questions, final_batch_history, final_predictions, batch_metrics = run_batch(
             retriever=retriever,
             query_generator=query_generator,
             answer_generator=answer_generator,
@@ -350,8 +245,8 @@ def main():
         )
 
         all_final_questions.extend(final_questions)
-        all_final_histories.extend(final_histories)
-        all_predictions.extend(predictions)
+        all_final_batch_history.extend(final_batch_history)
+        all_final_predictions.extend(final_predictions)
 
         for metric_type in ["retrieval", "answer"]:
             for metric_name in batch_metrics[metric_type]:
@@ -388,7 +283,7 @@ def main():
             "predictions": []
         }
 
-        for q, h, p in zip(all_final_questions, all_final_histories, all_predictions):
+        for q, h, p in zip(all_final_questions, all_final_batch_history, all_final_predictions):
             output_data["predictions"].append({
                 "id": q["id"],
                 "question": q["question"],

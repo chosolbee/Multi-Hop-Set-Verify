@@ -1,21 +1,14 @@
 import os
 import torch
 from vllm import LLM, SamplingParams
-from .prompts import SELF_ASK_PROMPT
+from .prompts import SELF_ASK_SYSTEM_PROMPT, SELF_ASK_USER_PROMPT_FIRST, SELF_ASK_USER_PROMPT_NOT_FIRST
 
 
 class QueryGenerator:
-    def __init__(self, model_id, tp_size, quantization, max_gen_length=200, temperature=0.7, top_p=0.9):
+    def __init__(self, llm, max_gen_length=200, temperature=0.7, top_p=0.9):
         os.environ['MKL_THREADING_LAYER']='GNU'
 
-        self.llm = LLM(
-            model=model_id,
-            tensor_parallel_size=tp_size,
-            quantization=quantization,
-            gpu_memory_utilization=0.9,
-            dtype=torch.bfloat16,
-            trust_remote_code=True,
-        )
+        self.llm = llm
 
         self.sampling_params = SamplingParams(
             temperature=temperature,
@@ -26,46 +19,62 @@ class QueryGenerator:
         print("Model loaded successfully.")
 
     def _gen_retriever_query_prompt(self, trace, is_first=False):
-        prompt = SELF_ASK_PROMPT + "\n" + trace
-        if is_first:
-            prompt += "Give a follow up question.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
-        else:
-            prompt += (
-                "Give an intermediate answer and a follow up question if needed. If not, give the final answer."
-                "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
-            )
-        return prompt.strip()
+        system_prompt = SELF_ASK_SYSTEM_PROMPT
+        user_prompt = trace + (SELF_ASK_USER_PROMPT_FIRST if is_first else SELF_ASK_USER_PROMPT_NOT_FIRST)
+        prompt = [
+            {
+                "role": "system",
+                "content":  system_prompt.strip(),
+            },
+            {
+                "role": "user",
+                "content": user_prompt.strip(),
+            },
+        ]
+        return prompt
 
     def batch_generate(self, traces, is_first=False):
         prompts = [self._gen_retriever_query_prompt(trace, is_first) for trace in traces]
 
-        outputs = self.llm.generate(prompts, self.sampling_params)
+        outputs = self.llm.chat(prompts, self.sampling_params)
 
         new_traces = []
-        queries = []
+        responses = []
+        is_query_list = []
         for trace, output in zip(traces, outputs):
-            new_trace, query = self.extract_query(output.outputs[0].text)
+            new_trace, response, is_query = self.extract_query(output.outputs[0].text)
             trace += new_trace
             new_traces.append(trace)
-            queries.append(query)
+            responses.append(response)
+            is_query_list.append(is_query)
 
-        return new_traces, queries
+        return new_traces, responses, is_query_list
 
     def extract_query(self, text):
         lines = text.strip().split('\n')
         trace = ""
         for line in lines:
-            trace += line.strip() + "\n"
-            if line.strip().lower().startswith("follow up: ") or line.strip().lower().startswith("follow-up: "):
-                return trace, line.strip()[len("Follow up: "):]
-        return trace, None
+            line_text = line.strip()
+            trace += line_text + "\n"
+            if line_text.lower().startswith("follow up: ") or line_text.lower().startswith("follow-up: "):
+                return trace, line_text.split(":")[-1].strip(), True
+            if "final answer" in line_text.lower():
+                return trace, line_text.split(":")[-1].strip(), False
+        return trace, "", False
 
 
 def test():
+    llm = LLM(
+        model="meta-llama/Llama-3.1-8B-instruct",
+        tensor_parallel_size=1,
+        quantization=None,
+        dtype=torch.bfloat16,
+        gpu_memory_utilization=0.9,
+        trust_remote_code=True,
+    )
+
     query_generator = QueryGenerator(
-        model_id="casperhansen/llama-3.3-70b-instruct-awq",
-        tp_size=2,
-        quantization="awq_marlin",
+        llm=llm,
         max_gen_length=2048,
         temperature=0.7,
         top_p=0.9,

@@ -2,11 +2,17 @@ import os
 import time
 import json
 import argparse
+from typing import List, Dict, Any, Tuple
+import torch
+from vllm import LLM
 import wandb
+
 from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
+from .utils import print_metrics, compute_retrieval_metrics, compute_answer_metrics
 from .contriever import Retriever
 from .query_generator.query_generator_self_ask import QueryGenerator
 from .verifier import Verifier
+from .answer_generator import AnswerGenerator
 
 
 def print_results(em_list, precision_list, recall_list, f1_list):
@@ -27,11 +33,25 @@ def print_results(em_list, precision_list, recall_list, f1_list):
     print()
 
 
-def run_batch(retriever, query_generator, verifier, questions,
-              max_iterations=5, max_search=10, verifier_threshold=0.9,
-              log_trace=False, stop_log_path=None):
+def run_batch(retriever: Retriever,
+              query_generator: QueryGenerator,
+              verifier: Verifier,
+              answer_generator: AnswerGenerator,
+              questions: List[Dict[str, Any]],
+              max_iterations: int = 5,
+              max_search: int = 10,
+              verifier_threshold: int = 0.9,
+              log_trace: bool = False,
+              generate_answers: bool = False,
+              stop_log_path: str = None) -> Tuple[List[Dict[str, Any]], List[List[Dict[str, Any]]], Dict[str, List[List[float]]], List[str]]:
     final_questions = []
     final_batch_history = []
+    final_predictions = []
+
+    unanswered_questions = []
+    unanswered_batch_history = []
+    # unanswered_traces = []
+
     batch_history = [[] for _ in range(len(questions))]
     traces = ["Question: " + question["question"] + "\n" for question in questions]
     iter_count = 0
@@ -41,22 +61,24 @@ def run_batch(retriever, query_generator, verifier, questions,
     while questions:
         start_time = time.time()
 
-        traces, queries = query_generator.batch_generate(traces, is_first=iter_count == 0)
+        traces, responses, is_query_list = query_generator.batch_generate(traces, is_first=iter_count == 0)
 
         search_questions = []
         search_batch_history = []
         search_traces = []
         search_queries = []
 
-        for question, history, trace, query in zip(questions, batch_history, traces, queries):
-            if query:
+        for question, history, trace, response, is_query in zip(questions, batch_history, traces, responses, is_query_list):
+            if is_query:
                 search_questions.append(question)
                 search_batch_history.append(history)
                 search_traces.append(trace)
-                search_queries.append(query)
+                search_queries.append(response)
             else:
                 final_questions.append(question)
                 final_batch_history.append(history)
+                if generate_answers:
+                    final_predictions.append(response)
 
                 stop_logs.append({
                     "question_id": question["id"],
@@ -101,8 +123,9 @@ def run_batch(retriever, query_generator, verifier, questions,
                 print()
 
             if max_score > verifier_threshold:
-                final_questions.append(question)
-                final_batch_history.append(history)
+                unanswered_questions.append(question)
+                unanswered_batch_history.append(history)
+                # unanswered_traces.append(trace + f"Context: {selected_doc['text']}\n")
 
                 stop_logs.append({
                     "question_id": question["id"],
@@ -123,9 +146,12 @@ def run_batch(retriever, query_generator, verifier, questions,
 
         iter_count += 1
         if iter_count >= max_iterations:
-            for question, history in zip(questions, batch_history):
-                final_questions.append(question)
-                final_batch_history.append(history)
+            unanswered_questions.extend(questions)
+            unanswered_batch_history.extend(batch_history)
+            final_questions.extend(unanswered_questions)
+            final_batch_history.extend(unanswered_batch_history)
+
+            for question in questions:
                 stop_logs.append({
                     "question_id": question["id"],
                     "gold_hop": len(question.get("question_decomposition", [])),
@@ -142,39 +168,38 @@ def run_batch(retriever, query_generator, verifier, questions,
                 print(f"  Passage: {doc['text']}")
             print()
 
-    em_list = [[], [], []]
-    precision_list = [[], [], []]
-    recall_list = [[], [], []]
-    f1_list = [[], [], []]
-
-    for question, history in zip(final_questions, final_batch_history):
-        qid = question["id"]
-        gold_hop = len(question.get("question_decomposition", []))
-
-        correct = sum(int(qid + "-sf" in doc["id"]) for doc in history)
-        retrieved = len(history)
-        em = int(correct == gold_hop and retrieved == gold_hop)
-        precision = correct / retrieved if retrieved else 0.0
-        recall = correct / gold_hop if gold_hop else 0.0
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-
-        for log in stop_logs:
-            if log["question_id"] == qid:
-                log.update({"em": em, "precision": precision, "recall": recall, "f1": f1})
-                break
-
-        idx = max(gold_hop - 2, 0)
-        em_list[idx].append(em)
-        precision_list[idx].append(precision)
-        recall_list[idx].append(recall)
-        f1_list[idx].append(f1)
+    em_list, precision_list, recall_list, f1_list = compute_retrieval_metrics(final_questions, final_batch_history, stop_logs)
 
     if stop_log_path:
         with open(stop_log_path,'a',encoding='utf-8') as f:
             for log in stop_logs:
                 f.write(json.dumps(log,ensure_ascii=False)+'\n')
 
-    return em_list, precision_list, recall_list, f1_list
+    ans_em_list = [[], [], []]
+    ans_f1_list = [[], [], []]
+
+    if generate_answers and answer_generator:
+        predictions = answer_generator.batch_answer(unanswered_questions, unanswered_batch_history)
+        final_predictions.extend(predictions)
+        ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, final_predictions)
+    else:
+        ans_em_list = [[], [], []]
+        ans_f1_list = [[], [], []]
+
+    metrics = {
+        "retrieval": {
+            "em": em_list,
+            "precision": precision_list,
+            "recall": recall_list,
+            "f1": f1_list
+        },
+        "answer": {
+            "em": ans_em_list,
+            "f1": ans_f1_list
+        }
+    }
+
+    return final_questions, final_batch_history, final_predictions, metrics
 
 
 def parse_args():
@@ -198,6 +223,12 @@ def parse_args():
     verifier_group.add_argument("--verifier-batch-size", type=int, default=8, help="Batch size for verifier")
     verifier_group.add_argument("--verifier-max-length", type=int, default=DEBERTA_MAX_LENGTH, help="Maximum length for verifier input")
 
+    answer_generator_group = parser.add_argument_group("Answer Generator Options")
+    answer_generator_group.add_argument("--generate-answers", action="store_true", help="Enable answer generation")
+    answer_generator_group.add_argument("--ag-max-gen-length", type=int, default=1024, help="Maximum generation length for answer generator")
+    answer_generator_group.add_argument("--ag-temperature", type=float, default=0.7, help="Temperature for answer generator")
+    answer_generator_group.add_argument("--ag-top-p", type=float, default=0.9, help="Top-p sampling for answer generator")
+
     main_group = parser.add_argument_group("Main Options")
     main_group.add_argument("--questions", type=str, required=True, help="Questions file path")
     main_group.add_argument("--batch-size", type=int, default=32, help="Batch size for processing questions")
@@ -205,6 +236,7 @@ def parse_args():
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--verifier-threshold", type=float, default=0.9, help="Threshold for verifier scores")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
+    main_group.add_argument("--output-path", type=str, help="Path to save predictions and metrics")
     main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
     args = parser.parse_args()
@@ -225,10 +257,17 @@ def main(args: argparse.Namespace):
         model_path="facebook/contriever-msmarco",
     )
 
-    query_generator = QueryGenerator(
-        model_id=args.qg_model_id,
-        tp_size=args.qg_tp_size,
+    shared_llm = LLM(
+        model=args.qg_model_id,
+        tensor_parallel_size=args.qg_tp_size,
         quantization=args.qg_quantization,
+        dtype=torch.bfloat16,
+        gpu_memory_utilization=0.9,
+        trust_remote_code=True,
+    )
+
+    query_generator = QueryGenerator(
+        llm=shared_llm,
         max_gen_length=args.qg_max_gen_length,
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
@@ -241,6 +280,16 @@ def main(args: argparse.Namespace):
         max_length=args.verifier_max_length,
     )
 
+    if args.generate_answers:
+        answer_generator = AnswerGenerator(
+            llm=shared_llm,
+            max_gen_length=args.ag_max_gen_length,
+            temperature=args.ag_temperature,
+            top_p=args.ag_top_p,
+        )
+    else:
+        answer_generator = None
+
     if args.stop_log_path:
         open(args.stop_log_path,"w", encoding="utf-8").close()
 
@@ -248,37 +297,95 @@ def main(args: argparse.Namespace):
         questions = f.readlines()
         questions = [json.loads(q) for q in questions]
 
-    em_list = [[], [], []]
-    precision_list = [[], [], []]
-    recall_list = [[], [], []]
-    f1_list = [[], [], []]
+    all_metrics = {
+        "retrieval": {
+            "em": [[], [], []],
+            "precision": [[], [], []],
+            "recall": [[], [], []],
+            "f1": [[], [], []]
+        },
+        "answer": {
+            "em": [[], [], []],
+            "f1": [[], [], []]
+        }
+    }
 
+    all_final_predictions = []
+    all_final_questions = []
+    all_final_batch_history = []
+
+    total_batches = (len(questions) + args.batch_size - 1) // args.batch_size
     for i in range(0, len(questions), args.batch_size):
-        batch_questions = questions[i : i + args.batch_size]
-        print(f"Processing batch {i // args.batch_size + 1} of {len(questions) // args.batch_size + 1}...\n")
+        batch_questions = questions[i:i + args.batch_size]
+        print(f"\nProcessing batch {i // args.batch_size + 1} of {total_batches}...\n")
 
-        em, precision, recall, f1 = run_batch(
+        final_questions, final_batch_history, final_predictions, batch_metrics = run_batch(
             retriever=retriever,
             query_generator=query_generator,
             verifier=verifier,
+            answer_generator=answer_generator,
             questions=batch_questions,
             max_iterations=args.max_iterations,
             max_search=args.max_search,
             verifier_threshold=args.verifier_threshold,
             log_trace=args.log_trace,
+            generate_answers=args.generate_answers,
             stop_log_path=args.stop_log_path,
         )
-        for j in range(3):
-            em_list[j].extend(em[j])
-            precision_list[j].extend(precision[j])
-            recall_list[j].extend(recall[j])
-            f1_list[j].extend(f1[j])
-        print_results(em_list, precision_list, recall_list, f1_list)
 
-    print("Final Results:")
-    print_results(em_list, precision_list, recall_list, f1_list)
-    print("All done!")
+        all_final_questions.extend(final_questions)
+        all_final_batch_history.extend(final_batch_history)
+        all_final_predictions.extend(final_predictions)
 
+        for metric_type in ["retrieval", "answer"]:
+            for metric_name in batch_metrics[metric_type]:
+                for hop_idx in range(3):
+                    all_metrics[metric_type][metric_name][hop_idx].extend(
+                        batch_metrics[metric_type][metric_name][hop_idx]
+                    )
+
+        print("\n===== BATCH RETRIEVAL METRICS =====")
+        print_metrics(batch_metrics["retrieval"]["em"], "EM")
+        print_metrics(batch_metrics["retrieval"]["precision"], "Precision")
+        print_metrics(batch_metrics["retrieval"]["recall"], "Recall")
+        print_metrics(batch_metrics["retrieval"]["f1"], "F1")
+
+        if args.generate_answers:
+            print("\n===== BATCH ANSWER METRICS =====")
+            print_metrics(batch_metrics["answer"]["em"], "EM")
+            print_metrics(batch_metrics["answer"]["f1"], "F1")
+
+    print("\n===== FINAL RETRIEVAL METRICS =====")
+    print_metrics(all_metrics["retrieval"]["em"], "EM")
+    print_metrics(all_metrics["retrieval"]["precision"], "Precision")
+    print_metrics(all_metrics["retrieval"]["recall"], "Recall")
+    print_metrics(all_metrics["retrieval"]["f1"], "F1")
+
+    if args.generate_answers:
+        print("\n===== FINAL ANSWER METRICS =====")
+        print_metrics(all_metrics["answer"]["em"], "EM")
+        print_metrics(all_metrics["answer"]["f1"], "F1")
+
+    if args.output_path:
+        output_data = {
+            "metrics": all_metrics,
+            "predictions": []
+        }
+
+        for q, h, p in zip(all_final_questions, all_final_batch_history, all_final_predictions):
+            output_data["predictions"].append({
+                "id": q["id"],
+                "question": q["question"],
+                "gold_answer": q.get("answer", ""),
+                "prediction": p if p else "",
+                "passages": [doc["text"] for doc in h]
+            })
+
+        os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
+        with open(args.output_path, "w", encoding="utf-8") as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
+
+    print("\nAll done!")
     wandb.finish()
 
 

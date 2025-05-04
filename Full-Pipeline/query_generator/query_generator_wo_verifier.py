@@ -2,7 +2,7 @@ import os
 import re
 import torch
 from vllm import LLM, SamplingParams
-from .prompts import COT_WO_VERIFIER_PROMPT
+from .prompts import COT_WO_VERIFIER_SYSTEM_PROMPT
 
 
 class QueryGenerator:
@@ -18,12 +18,22 @@ class QueryGenerator:
         )
 
     def _gen_retriever_query_prompt(self, question, confirmed_passages):
-        prompt = COT_WO_VERIFIER_PROMPT + question + "\n"
+        system_prompt = COT_WO_VERIFIER_SYSTEM_PROMPT
+        user_prompt = "Question: " + question
         if confirmed_passages:
             for idx, passage in enumerate(confirmed_passages, start=1):
-                prompt += f"Confirmed Passage {idx}: {passage['text']}\n"
-        prompt += "<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>"
-        return prompt.strip()
+                user_prompt += f"Confirmed Passage {idx}: {passage['text']}\n"
+        prompt = [
+            {
+                "role": "system",
+                "content":  system_prompt.strip(),
+            },
+            {
+                "role": "user",
+                "content": user_prompt.strip(),
+            }
+        ]
+        return prompt
 
     def batch_generate(self, questions, batch_confirmed_passages):
         prompts = [
@@ -31,7 +41,7 @@ class QueryGenerator:
             for question, confirmed_passages in zip(questions, batch_confirmed_passages)
         ]
 
-        outputs = self.llm.generate(prompts, self.sampling_params)
+        outputs = self.llm.chat(prompts, self.sampling_params)
 
         clean_texts = [self.extract_query(output.outputs[0].text) for output in outputs]
         return clean_texts

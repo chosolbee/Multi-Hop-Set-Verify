@@ -41,8 +41,7 @@ Confirmed Passage 3: WIZE (1340 AM) — branded WIZE AM 1340 — is a commercial
 Your Response: From the given passages, I can see that the Battle of Rich Mountain occurred in Randolph County, Virginia (now West Virginia), and that Kaskaskia was Illinois's first capital. To answer the question, I need to know when Springfield became the capital of Illinois. Therefore, my retrieval query would be: <query>When did Springfield become the capital of Illinois?</query>
 """
 
-COT_WO_VERIFIER_PROMPT = """
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+COT_WO_VERIFIER_SYSTEM_PROMPT = """
 You are tasked with generating targeted retrieval queries for multi-hop questions. A multi-hop question requires multiple pieces of information to be answered fully.
 
 Given:
@@ -89,9 +88,6 @@ Question: What river flows through Paris, and which iconic monument on its banks
 Confirmed Passage 1: "The Seine River flows through the heart of Paris."
 Confirmed Passage 2: "The Eiffel Tower, an iconic monument along the Seine, was completed in 1889."
 Your Response: The question asks for the river flowing through Paris and the iconic monument completed in 1889 on its banks. The confirmed passages provide both details: the Seine River and the Eiffel Tower. All required information is present. <stop>
-<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
-Question: 
 """
 
 SELF_ASK_SYSTEM_PROMPT = """

@@ -7,109 +7,83 @@ import torch
 from vllm import LLM
 import wandb
 
-from config import WANDB_ENTITY
+from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
 from .utils import print_metrics, compute_retrieval_metrics, compute_answer_metrics
 from .contriever import Retriever
-from .query_generator.query_generator_self_ask import QueryGenerator
+from .query_generator.query_generator_wo_verifier import QueryGenerator
+from .verifier import Reranker
 from .answer_generator import AnswerGenerator
 
 
 def run_batch(retriever: Retriever,
               query_generator: QueryGenerator,
+              reranker: Reranker,
               questions: List[Dict[str, Any]],
               answer_generator: AnswerGenerator = None,
               max_iterations: int = 5,
-              max_search : int = 10,
-              log_trace : bool = False,
+              max_search: int = 10,
+              log_trace: bool = False,
               generate_answers: bool = False,
               stop_log_path: str = None) -> Tuple[List[Dict[str, Any]], List[List[Dict[str, Any]]], Dict[str, List[List[float]]], List[str]]:
+
     final_questions = []
     final_batch_history = []
-    final_predictions = []
-
-    batch_history = [[] for _ in range(len(questions))]
-    traces = ["Question: " + question["question"] + "\n" for question in questions]
+    batch_history = [[] for _ in questions]
     iter_count = 0
-
     stop_logs = []
 
     while questions:
         start_time = time.time()
 
-        traces, responses, is_query_list = query_generator.batch_generate(traces, is_first=iter_count == 0)
+        queries = query_generator.batch_generate(questions, batch_history)
+        batch_docs = retriever.search(queries, max_search)
+        batch_scores = reranker.batch_rank(queries, batch_docs)
 
-        search_questions = []
-        search_batch_history = []
-        search_traces = []
-        search_queries = []
+        if log_trace:
+            for question, query, history, docs in zip(questions, queries, batch_history, batch_docs):
+                print(f"1. Question: {question['question']}")
+                print("2. History:")
+                for doc in history:
+                    print(f"  Passage: {doc['text']}")
+                print(f"3. Generated query: {query}")
+                print("4. Retrieved Passages:")
+                for doc in docs:
+                    print(f"  Passage: {doc['text']}")
+                print()
 
-        for question, history, trace, response, is_query in zip(questions, batch_history, traces, responses, is_query_list):
-            if is_query:
-                search_questions.append(question)
-                search_batch_history.append(history)
-                search_traces.append(trace)
-                search_queries.append(response)
-            else:
+        next_questions = []
+        next_batch_history = []
+
+        for question, history, query, docs, scores in zip(questions, batch_history, queries, batch_docs, batch_scores):
+            if query.strip().lower() == "<stop>":
                 final_questions.append(question)
                 final_batch_history.append(history)
-                if generate_answers:
-                    final_predictions.append(response)
 
                 stop_logs.append({
                     "question_id": question["id"],
                     "gold_hop": len(question.get("question_decomposition", [])),
                     "stop_iter": iter_count + 1
                 })
-
-                if log_trace:
-                    print(f"1. Question: {question['question']}")
-                    print("2. Trace:")
-                    print(trace.strip())
-                    print("** Finished processing question. **")
-                    print()
-
-        batch_docs = retriever.search(search_queries, max_search)
-
-        next_questions = []
-        next_batch_history = []
-        next_traces = []
-
-        for question, history, trace, query, docs in zip(
-            search_questions, search_batch_history, search_traces, search_queries, batch_docs
-        ):
-            for doc in docs:
-                if doc["id"] not in {d["id"] for d in history}:
-                    selected_doc = doc
-                    history.append(selected_doc)
-                    break
-
-            if log_trace:
-                print(f"1. Question: {question['question']}")
-                print("2. Trace:")
-                print(trace.strip())
-                print(f"3. Generated query: {query}")
-                print("4. Retrieved passages:")
-                for doc in docs:
-                    print(f"  Passage: {doc['text']}")
-                print()
-
-            next_questions.append(question)
-            next_batch_history.append(history)
-            next_traces.append(trace + f"Context: {selected_doc['text']}\n")
+            else:
+                for i, doc in enumerate(docs):
+                    if doc["id"] in {d["id"] for d in history}:
+                        scores[i] = float("-inf")
+                selected_doc = docs[scores.argmax()]
+                history.append(selected_doc)
+                next_questions.append(question)
+                next_batch_history.append(history)
 
         questions = next_questions
         batch_history = next_batch_history
-        traces = next_traces
 
-        print("Iteration", iter_count + 1, "completed in", time.time() - start_time, "seconds")
+        print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
         print(f"Remaining questions: {len(questions)}\n")
 
         iter_count += 1
         if iter_count >= max_iterations:
-            final_questions.extend(questions)
-            final_batch_history.extend(batch_history)
-
             for question, history in zip(questions, batch_history):
+                final_questions.append(question)
+                final_batch_history.append(history)
                 stop_logs.append({
                     "question_id": question["id"],
                     "gold_hop": len(question.get("question_decomposition", [])),
@@ -129,18 +103,15 @@ def run_batch(retriever: Retriever,
     em_list, precision_list, recall_list, f1_list = compute_retrieval_metrics(final_questions, final_batch_history, stop_logs)
 
     if stop_log_path:
-        with open(stop_log_path,'a',encoding='utf-8') as f:
+        with open(stop_log_path, 'a', encoding='utf-8') as f:
             for log in stop_logs:
-                f.write(json.dumps(log,ensure_ascii=False)+'\n')
-
-    ans_em_list = [[], [], []]
-    ans_f1_list = [[], [], []]
+                f.write(json.dumps(log, ensure_ascii=False) + '\n')
 
     if generate_answers and answer_generator:
-        predictions = answer_generator.batch_answer(questions, batch_history)
-        final_predictions.extend(predictions)
+        final_predictions = answer_generator.batch_answer(final_questions, final_batch_history)
         ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, final_predictions)
     else:
+        final_predictions = []
         ans_em_list = [[], [], []]
         ans_f1_list = [[], [], []]
 
@@ -175,9 +146,14 @@ def parse_args():
     query_generator_group.add_argument("--qg-temperature", type=float, default=0.7, help="Temperature for query generator")
     query_generator_group.add_argument("--qg-top-p", type=float, default=0.9, help="Top-p sampling for query generator")
 
+    reranker_group = parser.add_argument_group("Reranker Options")
+    reranker_group.add_argument("--reranker-model-id", type=str, default="BAAI/bge-reranker-v2-m3", help="Model ID for reranker")
+    reranker_group.add_argument("--reranker-batch-size", type=int, default=8, help="Batch size for reranker")
+    reranker_group.add_argument("--reranker-max-length", type=int, default=DEBERTA_MAX_LENGTH, help="Maximum length for reranker input")
+
     answer_generator_group = parser.add_argument_group("Answer Generator Options")
-    answer_generator_group.add_argument("--generate-answers", action="store_true", help="Enable answer generation")
-    answer_generator_group.add_argument("--ag-max-gen-length", type=int, default=1024, help="Maximum generation length for answer generator")
+    answer_generator_group.add_argument("--generate-answers", action="store_true", help="Generate answers for questions")
+    answer_generator_group.add_argument("--ag-max-gen-length", type=int, default=200, help="Maximum generation length for answer generator")
     answer_generator_group.add_argument("--ag-temperature", type=float, default=0.7, help="Temperature for answer generator")
     answer_generator_group.add_argument("--ag-top-p", type=float, default=0.9, help="Top-p sampling for answer generator")
 
@@ -187,14 +163,15 @@ def parse_args():
     main_group.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
-    main_group.add_argument("--output-path", type=str, help="Path to save predictions and metrics")
+    main_group.add_argument("--output-path", type=str, help="Path to save predictions")
     main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
-def main(args: argparse.Namespace):
+def main():
+    args = parse_args()
+
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if local_rank in [-1, 0]:
         wandb.init(project="MultiHopQA-test", entity=WANDB_ENTITY)
@@ -218,10 +195,16 @@ def main(args: argparse.Namespace):
     )
 
     query_generator = QueryGenerator(
-        llm=shared_llm,
+        llm = shared_llm,
         max_gen_length=args.qg_max_gen_length,
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
+    )
+
+    reranker = Reranker(
+        model_id=args.reranker_model_id,
+        batch_size=args.batch_size,
+        max_length=args.reranker_max_length,
     )
 
     if args.generate_answers:
@@ -235,11 +218,10 @@ def main(args: argparse.Namespace):
         answer_generator = None
 
     if args.stop_log_path:
-        open(args.stop_log_path,"w", encoding="utf-8").close()
+        open(args.stop_log_path, "w", encoding="utf-8").close()
 
     with open(args.questions, "r", encoding="utf-8") as f:
-        questions = f.readlines()
-        questions = [json.loads(q) for q in questions]
+        questions = [json.loads(line) for line in f]
 
     all_metrics = {
         "retrieval": {
@@ -266,6 +248,7 @@ def main(args: argparse.Namespace):
         final_questions, final_batch_history, final_predictions, batch_metrics = run_batch(
             retriever=retriever,
             query_generator=query_generator,
+            reranker=reranker,
             answer_generator=answer_generator,
             questions=batch_questions,
             max_iterations=args.max_iterations,
@@ -303,6 +286,11 @@ def main(args: argparse.Namespace):
     print_metrics(all_metrics["retrieval"]["recall"], "Recall")
     print_metrics(all_metrics["retrieval"]["f1"], "F1")
 
+    if args.generate_answers:
+        print("\n===== FINAL ANSWER METRICS =====")
+        print_metrics(all_metrics["answer"]["em"], "EM")
+        print_metrics(all_metrics["answer"]["f1"], "F1")
+
     if args.output_path:
         output_data = {
             "metrics": all_metrics,
@@ -327,5 +315,4 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    main(args)
+    main()

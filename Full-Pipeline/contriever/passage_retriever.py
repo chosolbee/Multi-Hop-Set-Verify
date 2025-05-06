@@ -112,7 +112,7 @@ def test(opt: argparse.Namespace):
         ]
     else:
         queries = [opt.query]
-    docs = retriever.search(queries, 20)
+    docs = retriever.search(queries, 10)
     print(docs)
 
 

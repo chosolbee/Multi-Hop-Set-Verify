@@ -10,55 +10,100 @@ import wandb
 from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
 from .utils import print_metrics, compute_retrieval_metrics, compute_answer_metrics
 from .contriever import Retriever
-from .query_generator import QueryGenerator
+from .query_generator.query_generator_self_ask import QueryGenerator
 from .verifier import Verifier, Reranker
 from .answer_generator import AnswerGenerator
+
+
+def print_results(em_list, precision_list, recall_list, f1_list):
+    em_flat = [item for sublist in em_list for item in sublist]
+    precision_flat = [item for sublist in precision_list for item in sublist]
+    recall_flat = [item for sublist in recall_list for item in sublist]
+    f1_flat = [item for sublist in f1_list for item in sublist]
+
+    print("Count:", [len(em) for em in em_list])
+    print("EM:", [sum(em) / len(em) if em else 0 for em in em_list])
+    print("Total EM", sum(em_flat) / len(em_flat) if em_flat else 0)
+    print("Precision:", [sum(precision) / len(precision) if precision else 0 for precision in precision_list])
+    print("Total Precision", sum(precision_flat) / len(precision_flat) if precision_flat else 0)
+    print("Recall:", [sum(recall) / len(recall) if recall else 0 for recall in recall_list])
+    print("Total Recall", sum(recall_flat) / len(recall_flat) if recall_flat else 0)
+    print("F1:", [sum(f1) / len(f1) if f1 else 0 for f1 in f1_list])
+    print("Total F1", sum(f1_flat) / len(f1_flat) if f1_flat else 0)
+    print()
 
 
 def run_batch(retriever: Retriever,
               query_generator: QueryGenerator,
               verifier: Verifier,
               reranker: Reranker,
+              answer_generator: AnswerGenerator,
               questions: List[Dict[str, Any]],
-              answer_generator: AnswerGenerator = None,
               max_iterations: int = 5,
               max_search: int = 10,
-              verifier_threshold: float = 0.9,
+              verifier_threshold: int = 0.9,
               log_trace: bool = False,
               generate_answers: bool = False,
               stop_log_path: str = None) -> Tuple[List[Dict[str, Any]], List[List[Dict[str, Any]]], Dict[str, List[List[float]]], List[str]]:
-
     final_questions = []
     final_batch_history = []
-    batch_history = [[] for _ in questions]
+    final_predictions = []
+
+    unanswered_questions = []
+    unanswered_batch_history = []
+    # unanswered_traces = []
+
+    batch_history = [[] for _ in range(len(questions))]
+    traces = ["Question: " + question["question"] + "\n" for question in questions]
     iter_count = 0
+
     stop_logs = []
 
     while questions:
         start_time = time.time()
 
-        queries = query_generator.batch_generate(questions, batch_history)
-        batch_docs = retriever.search(queries, max_search)
-        batch_scores_verifier = verifier.batch_verify(questions, batch_history, batch_docs)
-        batch_scores_reranker = reranker.batch_rank(queries, batch_docs)
+        traces, responses, is_query_list = query_generator.batch_generate(traces, is_first=iter_count == 0)
 
-        if log_trace:
-            for question, query, history, docs in zip(questions, queries, batch_history, batch_docs):
-                print(f"1. Question: {question['question']}")
-                print("2. History:")
-                for doc in history:
-                    print(f"  Passage: {doc['text']}")
-                print(f"3. Generated query: {query}")
-                print("4. Retrieved Passages:")
-                for doc in docs:
-                    print(f"  Passage: {doc['text']}")
-                print()
+        search_questions = []
+        search_batch_history = []
+        search_traces = []
+        search_queries = []
+
+        for question, history, trace, response, is_query in zip(questions, batch_history, traces, responses, is_query_list):
+            if is_query:
+                search_questions.append(question)
+                search_batch_history.append(history)
+                search_traces.append(trace)
+                search_queries.append(response)
+            else:
+                final_questions.append(question)
+                final_batch_history.append(history)
+                if generate_answers:
+                    final_predictions.append(response)
+
+                stop_logs.append({
+                    "question_id": question["id"],
+                    "gold_hop": len(question.get("question_decomposition", [])),
+                    "stop_iter": iter_count + 1
+                })
+
+                if log_trace:
+                    print(f"1. Question: {question['question']}")
+                    print("2. Trace:")
+                    print(trace.strip())
+                    print("** Finished processing question. (QG) **")
+                    print()
+
+        batch_docs = retriever.search(search_queries, max_search)
+        batch_scores_verifier = verifier.batch_verify(search_questions, search_batch_history, batch_docs)
+        batch_scores_reranker = reranker.batch_rank(search_queries, batch_docs)
 
         next_questions = []
         next_batch_history = []
+        next_traces = []
 
-        for question, history, query, docs, scores_verifier, scores_reranker in zip(
-            questions, batch_history, queries, batch_docs, batch_scores_verifier, batch_scores_reranker
+        for question, history, trace, query, docs, scores_verifier, scores_reranker in zip(
+            search_questions, search_batch_history, search_traces, search_queries, batch_docs, batch_scores_verifier, batch_scores_reranker
         ):
             for i, doc in enumerate(docs):
                 if doc["id"] in {d["id"] for d in history}:
@@ -69,31 +114,48 @@ def run_batch(retriever: Retriever,
             selected_doc = docs[scores_reranker.argmax()]
             history.append(selected_doc)
 
-            if max_score > verifier_threshold:
-                final_questions.append(question)
-                final_batch_history.append(history)
+            if log_trace:
+                print(f"1. Question: {question['question']}")
+                print("2. Trace:")
+                print(trace.strip())
+                print(f"3. Generated query: {query}")
+                print("4. Retrieved passages and scores:")
+                for doc, score in zip(docs, scores_reranker):
+                    print(f"  Score: {score:.2f} | Passage: {doc['text']}")
+                if max_score > verifier_threshold:
+                    print("** Finished processing question. (Verifier) **")
+                print()
 
-                gold_hop = len(question.get("question_decomposition", []))
+            if max_score > verifier_threshold:
+                unanswered_questions.append(question)
+                unanswered_batch_history.append(history)
+                # unanswered_traces.append(trace + f"Context: {selected_doc['text']}\n")
+
                 stop_logs.append({
                     "question_id": question["id"],
-                    "gold_hop": gold_hop,
+                    "gold_hop": len(question.get("question_decomposition", [])),
                     "stop_iter": iter_count + 1
                 })
             else:
                 next_questions.append(question)
                 next_batch_history.append(history)
+                next_traces.append(trace + f"Context: {selected_doc['text']}\n")
 
         questions = next_questions
         batch_history = next_batch_history
+        traces = next_traces
 
-        print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
+        print("Iteration", iter_count + 1, "completed in", time.time() - start_time, "seconds")
         print(f"Remaining questions: {len(questions)}\n")
 
         iter_count += 1
         if iter_count >= max_iterations:
-            for question, history in zip(questions, batch_history):
-                final_questions.append(question)
-                final_batch_history.append(history)
+            unanswered_questions.extend(questions)
+            unanswered_batch_history.extend(batch_history)
+            final_questions.extend(unanswered_questions)
+            final_batch_history.extend(unanswered_batch_history)
+
+            for question in questions:
                 stop_logs.append({
                     "question_id": question["id"],
                     "gold_hop": len(question.get("question_decomposition", [])),
@@ -113,15 +175,18 @@ def run_batch(retriever: Retriever,
     em_list, precision_list, recall_list, f1_list = compute_retrieval_metrics(final_questions, final_batch_history, stop_logs)
 
     if stop_log_path:
-        with open(stop_log_path, 'a', encoding='utf-8') as f:
+        with open(stop_log_path,'a',encoding='utf-8') as f:
             for log in stop_logs:
-                f.write(json.dumps(log, ensure_ascii=False) + '\n')
+                f.write(json.dumps(log,ensure_ascii=False)+'\n')
+
+    ans_em_list = [[], [], []]
+    ans_f1_list = [[], [], []]
 
     if generate_answers and answer_generator:
-        final_predictions = answer_generator.batch_answer(final_questions, final_batch_history)
+        predictions = answer_generator.batch_answer(unanswered_questions, unanswered_batch_history)
+        final_predictions.extend(predictions)
         ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, final_predictions)
     else:
-        final_predictions = []
         ans_em_list = [[], [], []]
         ans_f1_list = [[], [], []]
 
@@ -168,8 +233,8 @@ def parse_args():
     reranker_group.add_argument("--reranker-max-length", type=int, default=DEBERTA_MAX_LENGTH, help="Maximum length for reranker input")
 
     answer_generator_group = parser.add_argument_group("Answer Generator Options")
-    answer_generator_group.add_argument("--generate-answers", action="store_true", help="Generate answers for questions")
-    answer_generator_group.add_argument("--ag-max-gen-length", type=int, default=200, help="Maximum generation length for answer generator")
+    answer_generator_group.add_argument("--generate-answers", action="store_true", help="Enable answer generation")
+    answer_generator_group.add_argument("--ag-max-gen-length", type=int, default=1024, help="Maximum generation length for answer generator")
     answer_generator_group.add_argument("--ag-temperature", type=float, default=0.7, help="Temperature for answer generator")
     answer_generator_group.add_argument("--ag-top-p", type=float, default=0.9, help="Top-p sampling for answer generator")
 
@@ -180,15 +245,14 @@ def parse_args():
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
     main_group.add_argument("--verifier-threshold", type=float, default=0.9, help="Threshold for verifier scores")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
-    main_group.add_argument("--output-path", type=str, help="Path to save predictions")
+    main_group.add_argument("--output-path", type=str, help="Path to save predictions and metrics")
     main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    return args
 
 
-def main():
-    args = parse_args()
-
+def main(args: argparse.Namespace):
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if local_rank in [-1, 0]:
         wandb.init(project="MultiHopQA-test", entity=WANDB_ENTITY)
@@ -212,7 +276,7 @@ def main():
     )
 
     query_generator = QueryGenerator(
-        llm = shared_llm,
+        llm=shared_llm,
         max_gen_length=args.qg_max_gen_length,
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
@@ -242,10 +306,11 @@ def main():
         answer_generator = None
 
     if args.stop_log_path:
-        open(args.stop_log_path, "w", encoding="utf-8").close()
+        open(args.stop_log_path,"w", encoding="utf-8").close()
 
     with open(args.questions, "r", encoding="utf-8") as f:
-        questions = [json.loads(line) for line in f]
+        questions = f.readlines()
+        questions = [json.loads(q) for q in questions]
 
     all_metrics = {
         "retrieval": {
@@ -341,4 +406,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args)

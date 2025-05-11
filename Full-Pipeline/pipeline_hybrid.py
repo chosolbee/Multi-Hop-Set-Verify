@@ -27,7 +27,6 @@ def run_batch(retriever: Retriever,
               log_trace: bool = False,
               generate_answers: bool = False,
               stop_log_path: str = None) -> Tuple[List[Dict[str, Any]], List[List[Dict[str, Any]]], Dict[str, List[List[float]]], List[str]]:
-
     final_questions = []
     final_batch_history = []
     batch_history = [[] for _ in questions]
@@ -149,7 +148,7 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator")
+    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Model ID for query generator")
     query_generator_group.add_argument("--qg-tp-size", type=int, default=1, help="Tensor parallel size for query generator")
     query_generator_group.add_argument("--qg-quantization", type=str, help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")

@@ -60,7 +60,7 @@ class QueryGenerator:
 
 def test():
     llm = LLM(
-        model="meta-llama/Llama-3.1-8B-instruct",
+        model="meta-llama/Llama-3.1-8B-Instruct",
         tensor_parallel_size=1,
         quantization=None,
         dtype=torch.bfloat16,

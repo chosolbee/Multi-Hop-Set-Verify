@@ -146,7 +146,7 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator")
+    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Model ID for query generator")
     query_generator_group.add_argument("--qg-tp-size", type=int, default=1, help="Tensor parallel size for query generator")
     query_generator_group.add_argument("--qg-quantization", type=str, help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")

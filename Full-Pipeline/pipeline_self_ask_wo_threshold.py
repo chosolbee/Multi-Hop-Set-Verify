@@ -18,8 +18,8 @@ from .answer_generator import AnswerGenerator
 def run_batch(retriever: Retriever,
               query_generator: QueryGenerator,
               verifier: Verifier,
-              answer_generator: AnswerGenerator,
               questions: List[Dict[str, Any]],
+              answer_generator: AnswerGenerator = None,
               max_iterations: int = 5,
               max_search: int = 10,
               log_trace: bool = False,
@@ -104,7 +104,7 @@ def run_batch(retriever: Retriever,
         batch_history = next_batch_history
         traces = next_traces
 
-        print("Iteration", iter_count + 1, "completed in", time.time() - start_time, "seconds")
+        print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
         print(f"Remaining questions: {len(questions)}\n")
 
         iter_count += 1
@@ -171,7 +171,7 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator")
+    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Model ID for query generator")
     query_generator_group.add_argument("--qg-tp-size", type=int, default=1, help="Tensor parallel size for query generator")
     query_generator_group.add_argument("--qg-quantization", type=str, help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")

@@ -15,24 +15,6 @@ from .verifier import Verifier
 from .answer_generator import AnswerGenerator
 
 
-def print_results(em_list, precision_list, recall_list, f1_list):
-    em_flat = [item for sublist in em_list for item in sublist]
-    precision_flat = [item for sublist in precision_list for item in sublist]
-    recall_flat = [item for sublist in recall_list for item in sublist]
-    f1_flat = [item for sublist in f1_list for item in sublist]
-
-    print("Count:", [len(em) for em in em_list])
-    print("EM:", [sum(em) / len(em) if em else 0 for em in em_list])
-    print("Total EM", sum(em_flat) / len(em_flat) if em_flat else 0)
-    print("Precision:", [sum(precision) / len(precision) if precision else 0 for precision in precision_list])
-    print("Total Precision", sum(precision_flat) / len(precision_flat) if precision_flat else 0)
-    print("Recall:", [sum(recall) / len(recall) if recall else 0 for recall in recall_list])
-    print("Total Recall", sum(recall_flat) / len(recall_flat) if recall_flat else 0)
-    print("F1:", [sum(f1) / len(f1) if f1 else 0 for f1 in f1_list])
-    print("Total F1", sum(f1_flat) / len(f1_flat) if f1_flat else 0)
-    print()
-
-
 def run_batch(retriever: Retriever,
               query_generator: QueryGenerator,
               verifier: Verifier,
@@ -141,7 +123,7 @@ def run_batch(retriever: Retriever,
         batch_history = next_batch_history
         traces = next_traces
 
-        print("Iteration", iter_count + 1, "completed in", time.time() - start_time, "seconds")
+        print(f"Iteration {iter_count+1} completed in {time.time() - start_time:.2f} seconds")
         print(f"Remaining questions: {len(questions)}\n")
 
         iter_count += 1
@@ -210,7 +192,7 @@ def parse_args():
     retriever_group.add_argument("--embeddings", type=str, required=True, help="Document embedding path")
 
     query_generator_group = parser.add_argument_group("Query Generator Options")
-    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-instruct", help="Model ID for query generator")
+    query_generator_group.add_argument("--qg-model-id", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Model ID for query generator")
     query_generator_group.add_argument("--qg-tp-size", type=int, default=1, help="Tensor parallel size for query generator")
     query_generator_group.add_argument("--qg-quantization", type=str, help="Quantization method for query generator")
     query_generator_group.add_argument("--qg-max-gen-length", type=int, default=512, help="Maximum generation length for query generator")

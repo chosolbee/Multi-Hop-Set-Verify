@@ -56,16 +56,16 @@ class QueryGenerator:
         for line in lines:
             line_text = line.strip()
             trace += line_text + "\n"
-            if line_text.lower().startswith("follow up: ") or line_text.lower().startswith("follow-up: "):
+            if line_text.lower().startswith("follow up:") or line_text.lower().startswith("follow-up:"):
                 return trace, line_text.split(":")[-1].strip(), True
-            if "final answer" in line_text.lower():
+            if line_text.lower().startswith("so the final answer is:"):
                 return trace, line_text.split(":")[-1].strip(), False
-        return trace, "", False
+        return trace, "", True
 
 
 def test():
     llm = LLM(
-        model="meta-llama/Llama-3.1-8B-instruct",
+        model="meta-llama/Llama-3.1-8B-Instruct",
         tensor_parallel_size=1,
         quantization=None,
         dtype=torch.bfloat16,

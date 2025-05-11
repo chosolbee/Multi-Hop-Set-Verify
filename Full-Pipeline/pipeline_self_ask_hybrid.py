@@ -11,23 +11,29 @@ from config import WANDB_ENTITY, DEBERTA_MAX_LENGTH
 from .utils import print_metrics, compute_retrieval_metrics, compute_answer_metrics
 from .contriever import Retriever
 from .query_generator.query_generator_self_ask import QueryGenerator
-from .verifier import Reranker
+from .verifier import Verifier, Reranker
 from .answer_generator import AnswerGenerator
 
 
 def run_batch(retriever: Retriever,
               query_generator: QueryGenerator,
+              verifier: Verifier,
               reranker: Reranker,
+              answer_generator: AnswerGenerator,
               questions: List[Dict[str, Any]],
-              answer_generator: AnswerGenerator = None,
               max_iterations: int = 5,
               max_search: int = 10,
+              verifier_threshold: int = 0.9,
               log_trace: bool = False,
               generate_answers: bool = False,
               stop_log_path: str = None) -> Tuple[List[Dict[str, Any]], List[List[Dict[str, Any]]], Dict[str, List[List[float]]], List[str]]:
     final_questions = []
     final_batch_history = []
     final_predictions = []
+
+    unanswered_questions = []
+    unanswered_batch_history = []
+    # unanswered_traces = []
 
     batch_history = [[] for _ in range(len(questions))]
     traces = ["Question: " + question["question"] + "\n" for question in questions]
@@ -71,19 +77,23 @@ def run_batch(retriever: Retriever,
                     print()
 
         batch_docs = retriever.search(search_queries, max_search)
-        batch_scores = reranker.batch_rank(search_queries, batch_docs)
+        batch_scores_verifier = verifier.batch_verify(search_questions, search_batch_history, batch_docs)
+        batch_scores_reranker = reranker.batch_rank(search_queries, batch_docs)
 
         next_questions = []
         next_batch_history = []
         next_traces = []
 
-        for question, history, trace, query, docs, scores in zip(
-            search_questions, search_batch_history, search_traces, search_queries, batch_docs, batch_scores
+        for question, history, trace, query, docs, scores_verifier, scores_reranker in zip(
+            search_questions, search_batch_history, search_traces, search_queries, batch_docs, batch_scores_verifier, batch_scores_reranker
         ):
             for i, doc in enumerate(docs):
                 if doc["id"] in {d["id"] for d in history}:
-                    scores[i] = float("-inf")
-            selected_doc = docs[scores.argmax()]
+                    scores_verifier[i] = -1
+                    scores_reranker[i] = float("-inf")
+
+            max_score = scores_verifier.max()
+            selected_doc = docs[scores_reranker.argmax()]
             history.append(selected_doc)
 
             if log_trace:
@@ -92,13 +102,26 @@ def run_batch(retriever: Retriever,
                 print(trace.strip())
                 print(f"3. Generated query: {query}")
                 print("4. Retrieved passages and scores:")
-                for doc, score in zip(docs, scores):
+                for doc, score in zip(docs, scores_reranker):
                     print(f"  Score: {score:.2f} | Passage: {doc['text']}")
+                if max_score > verifier_threshold:
+                    print("** Finished processing question. (Verifier) **")
                 print()
 
-            next_questions.append(question)
-            next_batch_history.append(history)
-            next_traces.append(trace + f"Context: {selected_doc['text']}\n")
+            if max_score > verifier_threshold:
+                unanswered_questions.append(question)
+                unanswered_batch_history.append(history)
+                # unanswered_traces.append(trace + f"Context: {selected_doc['text']}\n")
+
+                stop_logs.append({
+                    "question_id": question["id"],
+                    "gold_hop": len(question.get("question_decomposition", [])),
+                    "stop_iter": iter_count + 1
+                })
+            else:
+                next_questions.append(question)
+                next_batch_history.append(history)
+                next_traces.append(trace + f"Context: {selected_doc['text']}\n")
 
         questions = next_questions
         batch_history = next_batch_history
@@ -109,8 +132,10 @@ def run_batch(retriever: Retriever,
 
         iter_count += 1
         if iter_count >= max_iterations:
-            final_questions.extend(questions)
-            final_batch_history.extend(batch_history)
+            unanswered_questions.extend(questions)
+            unanswered_batch_history.extend(batch_history)
+            final_questions.extend(unanswered_questions)
+            final_batch_history.extend(unanswered_batch_history)
 
             for question in questions:
                 stop_logs.append({
@@ -140,7 +165,7 @@ def run_batch(retriever: Retriever,
     ans_f1_list = [[], [], []]
 
     if generate_answers and answer_generator:
-        predictions = answer_generator.batch_answer(questions, batch_history)
+        predictions = answer_generator.batch_answer(unanswered_questions, unanswered_batch_history)
         final_predictions.extend(predictions)
         ans_em_list, ans_f1_list = compute_answer_metrics(final_questions, final_predictions)
     else:
@@ -178,6 +203,12 @@ def parse_args():
     query_generator_group.add_argument("--qg-temperature", type=float, default=0.7, help="Temperature for query generator")
     query_generator_group.add_argument("--qg-top-p", type=float, default=0.9, help="Top-p sampling for query generator")
 
+    verifier_group = parser.add_argument_group("Verifier Options")
+    verifier_group.add_argument("--verifier-model-id", type=str, default="microsoft/DeBERTa-v3-large", help="Model ID for verifier")
+    verifier_group.add_argument("--verifier-checkpoint-path", type=str, required=True, help="Checkpoint path for trained model")
+    verifier_group.add_argument("--verifier-batch-size", type=int, default=8, help="Batch size for verifier")
+    verifier_group.add_argument("--verifier-max-length", type=int, default=DEBERTA_MAX_LENGTH, help="Maximum length for verifier input")
+
     reranker_group = parser.add_argument_group("Reranker Options")
     reranker_group.add_argument("--reranker-model-id", type=str, default="BAAI/bge-reranker-v2-m3", help="Model ID for reranker")
     reranker_group.add_argument("--reranker-batch-size", type=int, default=8, help="Batch size for reranker")
@@ -194,6 +225,7 @@ def parse_args():
     main_group.add_argument("--batch-size", type=int, default=32, help="Batch size for processing questions")
     main_group.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
     main_group.add_argument("--max-search", type=int, default=10, help="Maximum number of passages to retrieve")
+    main_group.add_argument("--verifier-threshold", type=float, default=0.9, help="Threshold for verifier scores")
     main_group.add_argument("--log-trace", action="store_true", help="Log trace for debugging")
     main_group.add_argument("--output-path", type=str, help="Path to save predictions and metrics")
     main_group.add_argument("--stop-log-path", type=str, default=None, help="Optional JSONL path; Path to the JSONL file where stopping logs are written")
@@ -230,6 +262,13 @@ def main(args: argparse.Namespace):
         max_gen_length=args.qg_max_gen_length,
         temperature=args.qg_temperature,
         top_p=args.qg_top_p,
+    )
+
+    verifier = Verifier(
+        model_id=args.verifier_model_id,
+        checkpoint_path=args.verifier_checkpoint_path,
+        batch_size=args.verifier_batch_size,
+        max_length=args.verifier_max_length,
     )
 
     reranker = Reranker(
@@ -280,11 +319,13 @@ def main(args: argparse.Namespace):
         final_questions, final_batch_history, final_predictions, batch_metrics = run_batch(
             retriever=retriever,
             query_generator=query_generator,
+            verifier=verifier,
             reranker=reranker,
             answer_generator=answer_generator,
             questions=batch_questions,
             max_iterations=args.max_iterations,
             max_search=args.max_search,
+            verifier_threshold=args.verifier_threshold,
             log_trace=args.log_trace,
             generate_answers=args.generate_answers,
             stop_log_path=args.stop_log_path,
@@ -317,6 +358,11 @@ def main(args: argparse.Namespace):
     print_metrics(all_metrics["retrieval"]["precision"], "Precision")
     print_metrics(all_metrics["retrieval"]["recall"], "Recall")
     print_metrics(all_metrics["retrieval"]["f1"], "F1")
+
+    if args.generate_answers:
+        print("\n===== FINAL ANSWER METRICS =====")
+        print_metrics(all_metrics["answer"]["em"], "EM")
+        print_metrics(all_metrics["answer"]["f1"], "F1")
 
     if args.output_path:
         output_data = {
